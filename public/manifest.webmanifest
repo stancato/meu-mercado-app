@@ -1,0 +1,15 @@
+{
+  "name": "Meu Mercado",
+  "short_name": "Mercado",
+  "description": "Listas de compras e comparação de preços.",
+  "lang": "pt-BR",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0b1611",
+  "theme_color": "#18a567",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
