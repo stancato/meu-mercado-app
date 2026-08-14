@@ -43,6 +43,8 @@ export const initialState = {
   lists: [{ id: 'shopping-list', name: 'Lista de mercado', status: 'active', items: [], createdAt: null }],
   purchases: [],
   products: STARTER_PRODUCTS,
+  productMappings: [],
+  productNormalizations: [],
   markets: [],
   settings: { theme: 'system' },
   updatedAt: null,
@@ -95,12 +97,23 @@ export function normalizeImport(payload) {
   const rawItems = pick(payload, ['itens', 'items'], [])
   if (!Array.isArray(rawItems) || !rawItems.length) throw new Error('O JSON não contém uma lista de itens.')
   const items = rawItems.map((item) => {
+    const hasValue = (keys) => keys.some((key) => item?.[key] !== undefined && item[key] !== null && String(item[key]).trim() !== '')
+    const missingFields = [
+      [['produto', 'product'], 'productName'],
+      [['quantidadeComprada', 'quantidade', 'quantity'], 'quantity'],
+      [['conteudoEmbalagem', 'tamanhoEmbalagem', 'packageSize'], 'packageSize'],
+      [['unidadeConteudo', 'unidadeEmbalagem', 'packageUnit'], 'packageUnit'],
+      [['precoTotal', 'valorTotal', 'totalPrice'], 'totalPrice'],
+      [['categoria', 'category'], 'category'],
+    ].filter(([keys]) => !hasValue(keys)).map(([, field]) => field)
+    const itemWarnings = pick(item, ['problemasPossiveis', 'avisos', 'warnings'], [])
     const quantity = Number(pick(item, ['quantidadeComprada', 'quantidade', 'quantity'], 1)) || 1
     const totalPrice = Number(pick(item, ['precoTotal', 'valorTotal', 'totalPrice'], 0)) || 0
     return {
       id: uid(),
       originalDescription: String(pick(item, ['descricaoOriginal', 'descricao', 'originalDescription'], '')),
       productName: String(pick(item, ['produto', 'product'], '') || pick(item, ['descricaoOriginal', 'descricao'], 'Item')),
+      variety: String(pick(item, ['variedade', 'tipo', 'sabor', 'variety', 'flavor'], '')),
       brand: String(pick(item, ['marca', 'brand'], '')),
       quantity,
       packageSize: Number(pick(item, ['conteudoEmbalagem', 'tamanhoEmbalagem', 'packageSize'], 1)) || 1,
@@ -109,6 +122,8 @@ export function normalizeImport(payload) {
       totalPrice,
       barcode: String(pick(item, ['codigoBarras', 'gtin', 'barcode'], '') || ''),
       category: String(pick(item, ['categoria', 'category'], 'Outros')),
+      importMissingFields: missingFields,
+      importWarnings: Array.isArray(itemWarnings) ? itemWarnings.map(String).filter(Boolean) : String(itemWarnings || '').trim() ? [String(itemWarnings)] : [],
     }
   })
   const rawPurchaseDate = String(pick(purchase, ['data', 'date'], '') || '').trim()
@@ -127,6 +142,7 @@ export function normalizeImport(payload) {
     purchaseDateInferred: !rawPurchaseDate || !parsedPurchaseDate || Number.isNaN(parsedPurchaseDate.getTime()),
     documentNumber: String(pick(purchase, ['numeroDocumento', 'documentNumber'], '')),
     declaredTotal: Number(pick(purchase, ['valorTotal', 'total'], 0)) || 0,
+    importWarnings: (() => { const warnings = pick(payload, ['problemasPossiveis', 'avisos', 'warnings'], []); return Array.isArray(warnings) ? warnings.map(String).filter(Boolean) : String(warnings || '').trim() ? [String(warnings)] : [] })(),
     items,
   }
 }
@@ -146,10 +162,12 @@ Use exatamente este formato:
     "numeroDocumento": "número da nota/cupom ou string vazia",
     "valorTotal": 0.00
   },
+  "problemasPossiveis": [],
   "itens": [
     {
       "descricaoOriginal": "descrição exatamente como aparece na nota",
       "produto": "nome genérico e legível do produto, sem marca nem tamanho",
+      "variedade": "sabor, tipo ou versão do produto, como Tradicional, Queijo, Micro-ondas, Integral ou Sem lactose; string vazia se não houver",
       "marca": "marca inferida com segurança ou string vazia",
       "categoria": "Hortifruti, Mercearia, Frios, Carnes, Bebidas, Limpeza, Higiene ou Outros",
       "quantidadeComprada": 1,
@@ -157,7 +175,8 @@ Use exatamente este formato:
       "unidadeConteudo": "un, kg, g, L ou ml",
       "precoUnitario": 0.00,
       "precoTotal": 0.00,
-      "codigoBarras": "GTIN/EAN ou string vazia"
+      "codigoBarras": "GTIN/EAN ou string vazia",
+      "problemasPossiveis": []
     }
   ]
 }
@@ -165,6 +184,9 @@ Use exatamente este formato:
 Regras:
 - Use números, não textos, nos campos numéricos.
 - Não invente marca, código de barras, CNPJ ou tamanho ilegível.
+- Separe produto, variedade e marca. Use variedade para sabor, tipo ou versão. Exemplo: produto "Pipoca", variedade "Tradicional" e marca "Yoki". Não coloque variedade ou marca no nome do produto.
+- Use problemasPossiveis para apontar texto cortado, leitura incerta, quantidade/embalagem ambígua, desconto duvidoso, preço incompatível ou qualquer campo relevante que mereça revisão. Use [] quando não houver alertas.
+- Se uma informação não estiver legível, deixe o campo vazio quando ele aceitar string; para número obrigatório use 0 e explique o problema no alerta do item.
 - Para itens vendidos por peso, quantidadeComprada deve ser o peso e conteudoEmbalagem deve ser 1, usando kg como unidadeConteudo.
 - precoTotal é o valor efetivamente cobrado pelo item após descontos identificáveis.
 - Preserve todos os itens, inclusive itens repetidos.

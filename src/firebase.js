@@ -68,6 +68,8 @@ export async function loadCloudState(userId) {
         products,
         markets,
         settings: preferences.settings || { theme: 'system' },
+        productMappings: Array.isArray(preferences.productMappings) ? preferences.productMappings : [],
+        productNormalizations: Array.isArray(preferences.productNormalizations) ? preferences.productNormalizations : [],
         updatedAt: preferences.updatedAt || null,
       },
     }
@@ -101,6 +103,8 @@ export async function saveCloudState(userId, state, userProfile) {
   batch.set(doc(db, 'users', userId, 'shoppingList', 'current'), list)
   batch.set(doc(db, 'users', userId, 'app', 'preferences'), {
     settings: state.settings || { theme: 'system' },
+    productMappings: state.productMappings || [],
+    productNormalizations: state.productNormalizations || [],
     updatedAt: state.updatedAt || new Date().toISOString(),
     savedAt: serverTimestamp(),
   })

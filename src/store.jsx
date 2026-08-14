@@ -10,7 +10,10 @@ const normalizeState = (value = {}) => {
   const oldLists = Array.isArray(merged.lists) ? merged.lists : []
   const uniqueItems = []
   oldLists.flatMap((list) => list.items || []).forEach((item) => {
-    if (!uniqueItems.some((saved) => saved.name?.toLocaleLowerCase() === item.name?.toLocaleLowerCase())) uniqueItems.push(item)
+    if (!uniqueItems.some((saved) => saved.name?.toLocaleLowerCase() === item.name?.toLocaleLowerCase())) {
+      const { checked: _legacyChecked, ...listItem } = item
+      uniqueItems.push(listItem)
+    }
   })
   const savedProducts = Array.isArray(merged.products) ? merged.products : []
   const products = [...savedProducts]
@@ -20,6 +23,8 @@ const normalizeState = (value = {}) => {
   return {
     ...merged,
     products,
+    productMappings: Array.isArray(merged.productMappings) ? merged.productMappings : [],
+    productNormalizations: Array.isArray(merged.productNormalizations) ? merged.productNormalizations : [],
     lists: [{ id: 'shopping-list', name: 'Lista de mercado', status: 'active', items: uniqueItems, createdAt: oldLists[0]?.createdAt || new Date().toISOString() }],
     activePurchase: undefined,
   }
