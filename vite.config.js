@@ -1,8 +1,26 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { readFileSync } from 'node:fs'
+
+function versionedServiceWorker() {
+  const buildVersion = new Date().toISOString()
+
+  return {
+    name: 'versioned-service-worker',
+    apply: 'build',
+    generateBundle() {
+      const template = readFileSync(new URL('./src/service-worker.js', import.meta.url), 'utf8')
+      this.emitFile({
+        type: 'asset',
+        fileName: 'service-worker.js',
+        source: template.replaceAll('__BUILD_VERSION__', buildVersion),
+      })
+    },
+  }
+}
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), versionedServiceWorker()],
   build: {
     rollupOptions: {
       output: {

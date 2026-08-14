@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Apple, Archive, BarChart3, Bath, Beef, CalendarClock, Check, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, LayoutGrid, List, ListChecks, LogIn, LogOut, Milk, Package, PackageSearch, Pencil, Plus, ReceiptText, Search, Settings, Share2, ShoppingBasket, SprayCan, Store, Tags, Trash2 } from 'lucide-react'
+import { Apple, Archive, BarChart3, Bath, Beef, CalendarClock, Check, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, LayoutGrid, List, ListChecks, LogIn, LogOut, Milk, Package, PackageSearch, Pencil, Plus, ReceiptText, Search, Settings, Share2, ShoppingBasket, SprayCan, Store, Tags, Trash2, TrendingUp } from 'lucide-react'
 import { signOut } from 'firebase/auth'
 import { auth, firebaseReady, loginWithGoogle } from './firebase'
 import { CATEGORIES, RECEIPT_PROMPT, UNITS, dateTimeLocal, defaultUnitForProduct, money, normalizeImport, normalizeText, normalizedPrice, nowIso, onlyDigits, parseJsonInput, shortDate, uid } from './data'
@@ -7,7 +7,7 @@ import { Empty, Field, Modal, Toast } from './components'
 import { useStore } from './store'
 
 const NAV = [
-  ['lists', 'Lista', ListChecks], ['purchases', 'Compras', ReceiptText], ['prices', 'Preços', BarChart3], ['products', 'Produtos', PackageSearch], ['settings', 'Ajustes', Settings],
+  ['lists', 'Lista', ListChecks], ['purchases', 'Compras', ReceiptText], ['prices', 'Analytics', BarChart3], ['products', 'Produtos', PackageSearch], ['settings', 'Ajustes', Settings],
 ]
 
 const PERIODICITY_OPTIONS = [
@@ -18,6 +18,14 @@ const PERIODICITY_OPTIONS = [
   { value: '60', label: 'A cada 2 meses' },
   { value: '90', label: 'A cada 3 meses' },
   { value: '0', label: 'Só quando eu quiser' },
+]
+
+const ANALYTICS_PERIODS = [
+  { value: '30', label: 'Últimos 30 dias' },
+  { value: '90', label: 'Últimos 3 meses' },
+  { value: '180', label: 'Últimos 6 meses' },
+  { value: '365', label: 'Último ano' },
+  { value: 'all', label: 'Todo o histórico' },
 ]
 
 export default function App({ user }) {
@@ -32,10 +40,12 @@ export default function App({ user }) {
     const marketId = findOrCreateMarketId(state.markets, draft.market)
     const market = { id: marketId, ...draft.market, name: draft.market.name || 'Mercado não identificado' }
     const total = draft.items.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0)
-    const purchase = { id: uid(), marketId, marketName: market.name, purchasedAt: draft.purchasedAt || nowIso(), documentNumber: draft.documentNumber || '', total, items: draft.items, source: draft.source || 'manual' }
+    const purchasedAt = draft.purchasedAt || nowIso()
     mutate((current) => {
       const marketExists = current.markets.some((item) => item.id === marketId)
-      const products = mergeProducts(current.products, purchase.items)
+      const catalog = mergeProducts(current.products, draft.items, { purchasedAt, marketName: market.name })
+      const purchase = { id: uid(), marketId, marketName: market.name, purchasedAt, documentNumber: draft.documentNumber || '', total, items: catalog.items, source: draft.source || 'manual' }
+      const products = catalog.products
       return { ...current, purchases: [purchase, ...current.purchases], markets: marketExists ? current.markets.map((item) => item.id === marketId ? { ...item, ...market } : item) : [market, ...current.markets], products }
     })
     setModal(null); setTab('purchases'); setToast('Compra registrada e preços atualizados.')
@@ -43,29 +53,32 @@ export default function App({ user }) {
 
   return <div className="app-shell">
     <header className="topbar">
-      <div className="brand"><span className="brand-mark"><ShoppingBasket size={22} /></span><div><strong>Meu Mercado</strong><small>compre melhor, compare sempre</small></div></div>
-      <span className={`sync-pill ${syncStatus}`} title="Situação da sincronização">{syncStatus === 'synced' ? <Cloud size={14}/> : <CloudOff size={14}/>}<span>{syncStatus === 'synced' ? 'Sincronizado' : firebaseReady ? 'Local' : 'Modo local'}</span></span>
+      <div className="topbar-inner">
+        <div className="brand"><span className="brand-mark"><ShoppingBasket size={22} /></span><div><strong>Meu Mercado</strong><small>compre melhor, compare sempre</small></div></div>
+        <span className={`sync-pill ${syncStatus}`} title="Situação da sincronização">{syncStatus === 'synced' ? <Cloud size={14}/> : <CloudOff size={14}/>}<span>{syncStatus === 'synced' ? 'Sincronizado' : firebaseReady ? 'Local' : 'Modo local'}</span></span>
+      </div>
     </header>
 
     <main className="content">
       {tab === 'lists' && <ShoppingListPage state={state} mutate={mutate} open={setModal} />}
       {tab === 'purchases' && <PurchasesPage state={state} open={setModal} />}
-      {tab === 'prices' && <PricesPage state={state} />}
-      {tab === 'products' && <ProductsPage state={state} mutate={mutate} />}
+      {tab === 'prices' && <AnalyticsPage state={state} />}
+      {tab === 'products' && <ProductsPage state={state} mutate={mutate} open={setModal} />}
       {tab === 'settings' && <SettingsPage state={state} user={user} open={setModal} toast={setToast} />}
     </main>
 
     <nav className="bottom-nav">{NAV.map(([id, label, Icon]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}><Icon size={21}/><span>{label}</span></button>)}</nav>
 
-    {modal?.type === 'item' && <ItemPanel item={modal.item} state={state} onClose={() => setModal(null)} onSave={(item, updateCatalog) => {
-      if (updateCatalog && !window.confirm('Atualizar também o produto no catálogo? Isso afetará sugestões e futuras listas, mas não alterará compras anteriores.')) return
-      const originalName = modal.item.name
+    {modal?.type === 'item' && <ItemPanel item={modal.item} onClose={() => setModal(null)} onSave={(item) => {
       mutate((s) => ({
         ...s,
         lists: s.lists.map((list) => ({ ...list, items: list.items.map((old) => old.id === item.id ? item : old) })),
-        products: updateCatalog ? updateCatalogProduct(s.products, originalName, item) : s.products,
       }))
-      setModal(null); setToast(updateCatalog ? 'Item e produto do catálogo atualizados.' : 'Item atualizado nesta lista.')
+      setModal(null); setToast('Item atualizado nesta lista.')
+    }} />}
+    {modal?.type === 'product' && <ProductPanel product={modal.product} state={state} onClose={() => setModal(null)} onSave={(product) => {
+      mutate((current) => ({ ...current, products: current.products.map((saved) => saved.id === product.id ? product : saved) }))
+      setModal(null); setToast('Produto atualizado no catálogo.')
     }} />}
     {modal?.type === 'import' && <ImportModal onClose={() => setModal(null)} onReview={(draft) => setModal({ type: 'review', draft: { ...draft, source: 'json' } })} />}
     {modal?.type === 'manual' && <ManualPurchaseModal markets={state.markets} onClose={() => setModal(null)} onReview={(draft) => setModal({ type: 'review', draft: { ...draft, source: 'manual' } })} />}
@@ -78,7 +91,7 @@ export default function App({ user }) {
   </div>
 }
 
-function PageHeader({ eyebrow, title, text, action }) { return <div className="page-header"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1>{text && <p>{text}</p>}</div>{action}</div> }
+function PageHeader({ title, text, action }) { return <div className="page-header"><div><h1>{title}</h1>{text && <p>{text}</p>}</div>{action}</div> }
 
 const CATEGORY_ICONS = { Hortifruti: Apple, Mercearia: Coffee, Frios: Milk, Carnes: Beef, Bebidas: CupSoda, Limpeza: SprayCan, Higiene: Bath, Outros: Package }
 function CategoryIcon({ category, size = 20 }) { const Icon = CATEGORY_ICONS[category] || Package; return <span className={`category-icon category-${categoryKey(category)}`}><Icon size={size}/></span> }
@@ -114,7 +127,7 @@ function ShoppingListPage({ state, mutate, open }) {
       products: existsInCatalog
         ? s.products.map((saved) => normalizeText(saved.name) === productKey ? { ...saved, archivedAt: null } : saved)
         : [...s.products, { ...product, archivedAt: null }],
-      lists: s.lists.map((current) => ({ ...current, items: [...current.items, productToListItem(state, product)] })),
+      lists: s.lists.map((current) => ({ ...current, items: [...current.items, productToListItem(product)] })),
     }
   })
   const changeQuantity = (itemId, amount) => mutate((s) => ({ ...s, lists: s.lists.map((current) => ({ ...current, items: current.items.map((item) => item.id === itemId ? { ...item, quantity: Math.max(0.1, Math.round((Number(amount) || 1) * 100) / 100) } : item) })) }))
@@ -123,7 +136,7 @@ function ShoppingListPage({ state, mutate, open }) {
   const renderItem = (item) => <ShoppingListItem key={item.id} item={item} viewMode={viewMode} onToggle={() => toggleItem(item.id)} onChangeQuantity={(amount) => changeQuantity(item.id, amount)} onOpenMenu={(position) => setItemMenu({ item, ...position })}/>
   const groups = CATEGORIES.map((category) => ({ category, items: list.items.filter((item) => category === 'Outros' ? !CATEGORIES.includes(item.category || 'Outros') || (item.category || 'Outros') === 'Outros' : item.category === category) }))
     .filter((group) => group.items.length)
-  return <><PageHeader eyebrow="Planejamento" title="Lista de mercado"/>
+  return <><PageHeader title="Lista de mercado"/>
     <InlineProductSearch products={state.products} list={list} state={state} onAdd={addProduct}/>
     <div className="toolbar shopping-list-toolbar"><span className="list-count">{list.items.length} {list.items.length === 1 ? 'item' : 'itens'}</span><div className="list-view-actions">{list.items.length > 0 && <button className="share-list-button" aria-label="Compartilhar lista" title="Compartilhar lista" onClick={() => open({ type: 'share-list' })}><Share2 size={16}/><span>Compartilhar</span></button>}<button className={`group-toggle ${groupByCategory ? 'active' : ''}`} aria-label="Agrupar por categoria" title="Agrupar por categoria" aria-pressed={groupByCategory} onClick={() => setGroupByCategory((current) => !current)}><Tags size={16}/><span>Agrupar por categoria</span></button><div className="view-toggle" aria-label="Modo de visualização"><button className={viewMode === 'list' ? 'active' : ''} title="Visualizar em lista" aria-label="Visualizar em lista" aria-pressed={viewMode === 'list'} onClick={() => setViewMode('list')}><List size={18}/></button><button className={viewMode === 'grid' ? 'active' : ''} title="Visualizar em grade" aria-label="Visualizar em grade" aria-pressed={viewMode === 'grid'} onClick={() => setViewMode('grid')}><LayoutGrid size={18}/></button></div>{checked > 0 && <button className="ghost remove-checked" aria-label={`Remover ${checked} ${checked === 1 ? 'item marcado' : 'itens marcados'}`} title="Remover itens marcados" onClick={() => mutate((s) => ({ ...s, lists: s.lists.map((current) => ({ ...current, items: current.items.filter((item) => !item.checked) })) }))}><Trash2 size={16}/><span>Remover marcados</span><b className="checked-count" aria-hidden="true">{checked}</b></button>}</div></div>
     {list.items.length ? (groupByCategory ? <div className="category-groups">{groups.map((group) => <section className={`category-group category-${categoryKey(group.category)}`} key={group.category}><header><CategoryIcon category={group.category} size={17}/><div><h2>{group.category}</h2><span>{group.items.length} {group.items.length === 1 ? 'item' : 'itens'}</span></div></header><div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{group.items.map(renderItem)}</div></section>)}</div> : <div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{list.items.map(renderItem)}</div>) : <Empty icon={ShoppingBasket} title="Sua lista está vazia" text="Use a busca acima para adicionar o primeiro produto."/>}
@@ -174,7 +187,7 @@ function ShoppingListItem({ item, viewMode, onToggle, onChangeQuantity, onOpenMe
     if ((event.key === 'F10' && event.shiftKey) || event.key === 'ContextMenu') { event.preventDefault(); onOpenMenu(menuPosition(event.currentTarget)) }
   }
   return <article className={`item-row simple category-${categoryKey(item.category)} ${item.checked ? 'checked' : ''}`} role="button" tabIndex="0" aria-pressed={item.checked} aria-label={`${item.name}. ${item.checked ? 'Comprado' : 'Pendente'}. Toque para ${item.checked ? 'desmarcar' : 'marcar'}; segure para mais opções.`} onClick={clickCard} onKeyDown={keyDown} onContextMenu={openContextMenu} onPointerDown={startPress} onPointerMove={movePress} onPointerUp={finishPress} onPointerCancel={finishPress}>
-    {item.checked ? <span className="purchased-icon" aria-hidden="true"><Check size={20}/></span> : <CategoryIcon category={item.category}/>}<div className="item-main"><b>{item.name}</b>{viewMode === 'grid' && <small>{item.category}</small>}</div><div className="quantity-stepper"><button aria-label={`Diminuir quantidade de ${item.name}`} onClick={(event) => { event.stopPropagation(); onChangeQuantity(Number(item.quantity) - 1) }}>−</button><input aria-label={`Quantidade de ${item.name}`} type="number" min="0.1" step="1" value={item.quantity} onClick={(event) => event.stopPropagation()} onChange={(event) => onChangeQuantity(event.target.value)}/><span>{item.unit}</span><button aria-label={`Aumentar quantidade de ${item.name}`} onClick={(event) => { event.stopPropagation(); onChangeQuantity(Number(item.quantity) + 1) }}>+</button></div>
+    {item.checked ? <span className="purchased-icon" aria-hidden="true"><Check size={20}/></span> : <CategoryIcon category={item.category}/>}<div className="item-main"><b>{item.name}</b>{item.note ? <small className="item-note">{item.note}</small> : viewMode === 'grid' && <small>{item.category}</small>}</div><div className="quantity-stepper"><button aria-label={`Diminuir quantidade de ${item.name}`} onClick={(event) => { event.stopPropagation(); onChangeQuantity(Number(item.quantity) - 1) }}>−</button><input aria-label={`Quantidade de ${item.name}`} type="number" min="0.1" step="1" value={item.quantity} onClick={(event) => event.stopPropagation()} onChange={(event) => onChangeQuantity(event.target.value)}/><span>{item.unit}</span><button aria-label={`Aumentar quantidade de ${item.name}`} onClick={(event) => { event.stopPropagation(); onChangeQuantity(Number(item.quantity) + 1) }}>+</button></div>
   </article>
 }
 
@@ -194,18 +207,66 @@ function menuPosition(element, pointerX, pointerY) {
   return { x, y }
 }
 
-function PurchasesPage({ state, open }) { return <><PageHeader eyebrow="Histórico" title="Compras" text="Cada compra alimenta seu histórico de preços." action={<div className="button-pair"><button className="secondary" onClick={() => open({ type: 'import' })}><ReceiptText size={18}/> Importar JSON</button><button className="primary" onClick={() => open({ type: 'manual' })}><Plus size={18}/> Manual</button></div>}/>
+function PurchasesPage({ state, open }) { return <><PageHeader title="Compras" text="Cada compra alimenta seu histórico de preços." action={<div className="button-pair"><button className="secondary" onClick={() => open({ type: 'import' })}><ReceiptText size={18}/> Importar JSON</button><button className="primary" onClick={() => open({ type: 'manual' })}><Plus size={18}/> Manual</button></div>}/>
   {state.purchases.length ? <div className="purchase-list">{state.purchases.map((purchase) => <button className="purchase-card" key={purchase.id} onClick={() => open({ type: 'purchase-detail', purchase })}><span className="card-icon"><Store/></span><span className="grow"><b>{purchase.marketName}</b><small>{shortDate(purchase.purchasedAt)} · {purchase.items.length} itens</small></span><strong>{money(purchase.total)}</strong><ChevronRight/></button>)}</div> : <Empty icon={ReceiptText} title="Nenhuma compra registrada" text="Importe o JSON de uma nota ou registre sua compra manualmente."/>}</> }
 
-function PricesPage({ state }) {
+function AnalyticsPage({ state }) {
+  const [section, setSection] = useState('summary')
+  const [period, setPeriod] = useState('90')
   const [query, setQuery] = useState('')
-  const rows = useMemo(() => priceRows(state).filter((row) => normalizeText(row.name).includes(normalizeText(query))), [state, query])
-  return <><PageHeader eyebrow="Inteligência de preços" title="Compare antes de comprar" text="Valores são normalizados por kg, litro ou unidade quando possível."/><div className="search"><Search size={18}/><input placeholder="Buscar produto" value={query} onChange={(e) => setQuery(e.target.value)}/></div>
-    {rows.length ? <div className="price-grid">{rows.map((row) => <article className={`price-card category-${categoryKey(row.category)}`} key={row.name}><div className="price-title"><CategoryIcon category={row.category}/><div><span>{row.category}</span><h3>{row.name}</h3><small>{row.count} registros · última compra {shortDate(row.latestDate)}</small></div></div><div className="metrics"><div><small>Último</small><b>{money(row.latest)}</b></div><div><small>Menor</small><b className="green">{money(row.min)}</b></div><div><small>Maior</small><b>{money(row.max)}</b></div></div>{row.unit && <p className="normalized">Melhor preço normalizado: {money(row.normalizedMin)} / {row.unit}</p>}<div className="market-tags">{row.markets.slice(0, 3).map((m) => <span key={m}>{m}</span>)}</div></article>)}</div> : <Empty icon={CircleDollarSign} title="Ainda não há preços para comparar" text="Registre uma compra para criar seu primeiro histórico."/>}
+  const filteredState = useMemo(() => ({ ...state, purchases: filterPurchasesByPeriod(state.purchases, period) }), [state, period])
+  const rows = useMemo(() => priceRows(filteredState).filter((row) => normalizeText(row.name).includes(normalizeText(query))), [filteredState, query])
+  const analytics = useMemo(() => analyticsData(filteredState, state.purchases, period), [filteredState, state.purchases, period])
+  const tabs = [
+    ['summary', 'Resumo', TrendingUp],
+    ['products', 'Produtos', PackageSearch],
+    ['markets', 'Mercados', Store],
+    ['categories', 'Categorias', Tags],
+  ]
+
+  return <>
+    <PageHeader title="Analytics" text="Entenda seus gastos, compare preços e descubra onde seu dinheiro rende mais."/>
+    <div className="analytics-controls"><div className="analytics-tabs" role="tablist" aria-label="Visões de analytics">{tabs.map(([id, label, Icon]) => <button key={id} role="tab" aria-selected={section === id} className={section === id ? 'active' : ''} onClick={() => setSection(id)}><Icon size={17}/><span>{label}</span></button>)}</div><label className="analytics-period"><CalendarClock size={16}/><span>Período</span><select aria-label="Período dos indicadores" value={period} onChange={(event) => setPeriod(event.target.value)}>{ANALYTICS_PERIODS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label></div>
+    {!state.purchases.length ? <Empty icon={BarChart3} title="Seus indicadores aparecerão aqui" text="Registre uma compra para começar a acompanhar gastos, preços, mercados e categorias."/> : !filteredState.purchases.length ? <Empty icon={CalendarClock} title="Nenhuma compra neste período" text="Selecione um intervalo maior para visualizar seus indicadores."/> : <>
+      {section === 'summary' && <AnalyticsSummary analytics={analytics}/>}
+      {section === 'products' && <><div className="analytics-section-heading"><div><h2>Comparativo de preços</h2><p>Valores normalizados por kg, litro ou unidade quando possível.</p></div><div className="search"><Search size={18}/><input placeholder="Buscar produto" value={query} onChange={(e) => setQuery(e.target.value)}/></div></div>
+        {rows.length ? <div className="price-grid">{rows.map((row) => <article className={`price-card category-${categoryKey(row.category)}`} key={row.name}><div className="price-title"><CategoryIcon category={row.category}/><div><span>{row.category}</span><h3>{row.name}</h3><small>{row.count} registros · última compra {shortDate(row.latestDate)}</small></div></div><div className="metrics"><div><small>Último</small><b>{money(row.latest)}</b></div><div><small>Menor</small><b className="green">{money(row.min)}</b></div><div><small>Maior</small><b>{money(row.max)}</b></div></div>{row.unit && <p className="normalized">Melhor preço normalizado: {money(row.normalizedMin)} / {row.unit}</p>}<div className="market-tags">{row.markets.slice(0, 3).map((m) => <span key={m}>{m}</span>)}</div></article>)}</div> : <Empty icon={Search} title="Nenhum produto encontrado" text="Tente buscar por outro nome."/>}</>}
+      {section === 'markets' && <MarketAnalytics rows={analytics.markets}/>}
+      {section === 'categories' && <CategoryAnalytics rows={analytics.categories} total={analytics.totalSpent}/>}
+    </>}
   </>
 }
 
-function ProductsPage({ state, mutate }) {
+function AnalyticsSummary({ analytics }) {
+  const maxPurchase = Math.max(...analytics.recentPurchases.map((purchase) => Number(purchase.total) || 0), 1)
+  return <div className="analytics-dashboard">
+    <div className="kpi-grid">
+      <article className="kpi-card"><span className="kpi-icon green"><CircleDollarSign size={19}/></span><small>Total gasto</small><strong>{money(analytics.totalSpent)}</strong><p>{analytics.spendingComparison}</p></article>
+      <article className="kpi-card"><span className="kpi-icon blue"><ReceiptText size={19}/></span><small>Ticket médio</small><strong>{money(analytics.averageTicket)}</strong><p>{analytics.purchaseCount} {analytics.purchaseCount === 1 ? 'compra registrada' : 'compras registradas'}</p></article>
+      <article className="kpi-card"><span className="kpi-icon purple"><ShoppingBasket size={19}/></span><small>Itens por compra</small><strong>{formatNumber(analytics.itemsPerPurchase, 1)}</strong><p>{analytics.itemCount} {analytics.itemCount === 1 ? 'item no histórico' : 'itens no histórico'}</p></article>
+      <article className="kpi-card"><span className="kpi-icon orange"><Store size={19}/></span><small>Mercados visitados</small><strong>{analytics.markets.length}</strong><p>{analytics.uniqueProducts} {analytics.uniqueProducts === 1 ? 'produto diferente' : 'produtos diferentes'}</p></article>
+    </div>
+    <div className="analytics-panels">
+      <section className="analytics-panel"><header><div><h2>Compras recentes</h2><p>Valor total de cada compra</p></div></header><div className="purchase-bars">{analytics.recentPurchases.map((purchase) => <div className="purchase-bar" key={purchase.id}><div><b>{purchase.marketName}</b><small>{shortDate(purchase.purchasedAt)}</small></div><span><i style={{ width: `${Math.max(5, Number(purchase.total || 0) / maxPurchase * 100)}%` }}/></span><strong>{money(purchase.total)}</strong></div>)}</div></section>
+      <section className="analytics-panel"><header><div><h2>Destaques</h2><p>O que mais chama atenção no histórico</p></div></header><div className="insight-list">
+        <div><span className="insight-icon"><Store size={18}/></span><p><small>Mercado com maior gasto</small><b>{analytics.markets[0]?.name || '—'}</b><em>{analytics.markets[0] ? money(analytics.markets[0].total) : 'Sem dados'}</em></p></div>
+        <div><span className="insight-icon"><Tags size={18}/></span><p><small>Categoria com maior gasto</small><b>{analytics.categories[0]?.name || '—'}</b><em>{analytics.categories[0] ? money(analytics.categories[0].total) : 'Sem dados'}</em></p></div>
+        <div><span className="insight-icon"><TrendingUp size={18}/></span><p><small>Maior variação de preço</small><b>{analytics.biggestVariation?.name || 'Mais histórico necessário'}</b><em>{analytics.biggestVariation ? `${formatNumber(analytics.biggestVariation.variation, 0)}% entre menor e maior` : 'Compare após novas compras'}</em></p></div>
+      </div></section>
+    </div>
+  </div>
+}
+
+function MarketAnalytics({ rows }) {
+  const maxTotal = Math.max(...rows.map((row) => row.total), 1)
+  return <div><div className="analytics-section-heading"><div><h2>Desempenho por mercado</h2><p>Compare frequência, gasto acumulado e ticket médio.</p></div></div><div className="ranking-list">{rows.map((row, index) => <article className="ranking-card" key={row.name}><span className="ranking-position">{index + 1}</span><span className="ranking-icon"><Store size={20}/></span><div className="ranking-main"><div><b>{row.name}</b><small>{row.count} {row.count === 1 ? 'compra' : 'compras'} · última em {shortDate(row.latestDate)}</small></div><span className="ranking-progress"><i style={{ width: `${row.total / maxTotal * 100}%` }}/></span></div><div className="ranking-values"><strong>{money(row.total)}</strong><small>média {money(row.average)}</small></div></article>)}</div></div>
+}
+
+function CategoryAnalytics({ rows, total }) {
+  return <div><div className="analytics-section-heading"><div><h2>Gastos por categoria</h2><p>Veja quais grupos têm mais peso no seu orçamento.</p></div></div><div className="category-analytics-grid">{rows.map((row) => { const percentage = total ? row.total / total * 100 : 0; return <article className={`category-analytics-card category-${categoryKey(row.name)}`} key={row.name}><div className="category-analytics-title"><CategoryIcon category={row.name} size={20}/><div><b>{row.name}</b><small>{row.itemCount} {row.itemCount === 1 ? 'item comprado' : 'itens comprados'}</small></div><strong>{formatNumber(percentage, 0)}%</strong></div><div className="category-analytics-value"><strong>{money(row.total)}</strong><small>média de {money(row.averageItem)} por item</small></div><span className="category-progress"><i style={{ width: `${percentage}%` }}/></span></article> })}</div></div>
+}
+
+function ProductsPage({ state, mutate, open }) {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState([])
   const [bulkPeriodicity, setBulkPeriodicity] = useState('30')
@@ -240,14 +301,21 @@ function ProductsPage({ state, mutate }) {
   const renderProduct = (product) => {
     const frequency = periodicityInfo(state, product)
     return <article className={`product-card category-${categoryKey(product.category)} ${selectedSet.has(product.id) ? 'selected' : ''}`} key={product.id}>
-      <button className="product-select" aria-label={`Selecionar ${product.name}`} onClick={() => toggle(product.id)}>{selectedSet.has(product.id) && <Check size={15}/>}</button>
-      <CategoryIcon category={product.category} size={22}/>
-      <div className="grow"><b>{product.name}</b><small>{product.category} · {(product.variants || []).length} variações</small><label className="periodicity-control"><CalendarClock size={14}/><select aria-label={`Periodicidade de ${product.name}`} value={product.recurrenceDays == null ? 'auto' : String(product.recurrenceDays)} onChange={(event) => setProductPeriodicity([product.id], event.target.value)}>{PERIODICITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>{product.recurrenceDays == null && <small className="automatic-hint">Sugestão atual: {frequency.label}</small>}<div className="market-tags">{(product.brands || []).filter(Boolean).map((brand) => <span key={brand}>{brand}</span>)}</div></div>
-      <button className="icon-button archive-product" aria-label={`Arquivar ${product.name}`} title="Arquivar produto" onClick={() => archiveProduct(product.id)}><Archive size={17}/></button>
+      <div className="product-card-header">
+        <button className="product-select" aria-label={`Selecionar ${product.name}`} aria-pressed={selectedSet.has(product.id)} onClick={() => toggle(product.id)}>{selectedSet.has(product.id) && <Check size={15}/>}</button>
+        <CategoryIcon category={product.category} size={22}/>
+        <div className="product-title"><b>{product.name}</b><small>{product.category} · {product.defaultUnit || defaultUnitForProduct(product.name, product.category)}</small></div>
+        <div className="product-card-actions"><button className="icon-button edit-product" aria-label={`Editar ${product.name}`} title="Editar produto" onClick={() => open({ type: 'product', product })}><Pencil size={17}/></button><button className="icon-button archive-product" aria-label={`Arquivar ${product.name}`} title="Arquivar produto" onClick={() => archiveProduct(product.id)}><Archive size={17}/></button></div>
+      </div>
+      <div className="product-card-body">
+        <div className="product-card-meta"><span>{(product.variants || []).length} {(product.variants || []).length === 1 ? 'variação' : 'variações'}</span>{(product.brands || []).filter(Boolean).length > 0 && <span>{(product.brands || []).filter(Boolean).length} {(product.brands || []).filter(Boolean).length === 1 ? 'marca' : 'marcas'}</span>}</div>
+        {(product.brands || []).filter(Boolean).length > 0 && <div className="market-tags">{(product.brands || []).filter(Boolean).map((brand) => <span key={brand}>{brand}</span>)}</div>}
+      </div>
+      <div className="product-card-footer"><div><span className="product-card-label"><CalendarClock size={14}/> Reposição</span>{product.recurrenceDays == null && <small className="automatic-hint">Sugestão: {frequency.label}</small>}</div><select aria-label={`Periodicidade de ${product.name}`} value={product.recurrenceDays == null ? 'auto' : String(product.recurrenceDays)} onChange={(event) => setProductPeriodicity([product.id], event.target.value)}>{PERIODICITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
     </article>
   }
   return <>
-    <PageHeader eyebrow="Catálogo aprendido" title="Produtos" text="A periodicidade automática usa seu histórico; você pode ajustar um item ou vários de uma vez."/>
+    <PageHeader title="Produtos" text="A periodicidade automática usa seu histórico; você pode ajustar um item ou vários de uma vez."/>
     <div className="catalog-tools">
       <div className="search"><Search size={18}/><input placeholder="Produto ou marca" value={query} onChange={(e) => setQuery(e.target.value)}/></div>
       <div className="catalog-actions"><button className={`group-toggle ${productGrouping === 'category' ? 'active' : ''}`} aria-label="Agrupar produtos por categoria" title="Agrupar por categoria" aria-pressed={productGrouping === 'category'} onClick={() => setProductGrouping((current) => current === 'category' ? '' : 'category')}><Tags size={16}/><span>Agrupar por categoria</span></button><button className={`group-toggle ${productGrouping === 'periodicity' ? 'active' : ''}`} aria-label="Agrupar produtos por periodicidade" title="Agrupar por periodicidade" aria-pressed={productGrouping === 'periodicity'} onClick={() => setProductGrouping((current) => current === 'periodicity' ? '' : 'periodicity')}><CalendarClock size={16}/><span>Agrupar por periodicidade</span></button><button className="ghost select-visible" aria-label={allVisibleSelected ? 'Desmarcar produtos visíveis' : 'Selecionar produtos visíveis'} title={allVisibleSelected ? 'Desmarcar visíveis' : 'Selecionar visíveis'} onClick={() => setSelected(allVisibleSelected ? selected.filter((id) => !products.some((product) => product.id === id)) : [...new Set([...selected, ...products.map((product) => product.id)])])}><Check size={16}/><span>{allVisibleSelected ? 'Desmarcar visíveis' : 'Selecionar visíveis'}</span></button></div>
@@ -257,7 +325,7 @@ function ProductsPage({ state, mutate }) {
   </>
 }
 
-function SettingsPage({ user, open, toast }) { return <><PageHeader eyebrow="Preferências" title="Ajustes" text="Conta, importação e estado da sincronização."/><div className="settings-list"><section className="settings-card"><span className="card-icon">{user ? <Cloud/> : <LogIn/>}</span><div className="grow"><b>{user ? user.displayName : 'Conta Google'}</b><small>{user ? user.email : firebaseReady ? 'Entre para sincronizar entre dispositivos' : 'Firebase ainda não configurado; seus dados estão seguros neste dispositivo'}</small></div>{user ? <button className="secondary" onClick={() => signOut(auth)}><LogOut size={16}/> Sair</button> : <button className="primary" disabled={!firebaseReady} onClick={() => loginWithGoogle().catch((e) => toast(e.message))}>Entrar</button>}</section><button className="settings-card clickable" onClick={() => open({ type: 'prompt' })}><span className="card-icon"><ClipboardCopy/></span><div className="grow"><b>Prompt para leitura da nota</b><small>Copie o formato esperado e use na IA de sua preferência</small></div><ChevronRight/></button><section className="settings-card"><span className="card-icon"><CloudOff/></span><div><b>PWA e modo offline</b><small>A lista permanece disponível sem conexão. A sincronização ocorre ao voltar.</small></div></section></div></> }
+function SettingsPage({ user, open, toast }) { return <><PageHeader title="Ajustes" text="Conta, importação e estado da sincronização."/><div className="settings-list"><section className="settings-card"><span className="card-icon">{user ? <Cloud/> : <LogIn/>}</span><div className="grow"><b>{user ? user.displayName : 'Conta Google'}</b><small>{user ? user.email : firebaseReady ? 'Entre para sincronizar entre dispositivos' : 'Firebase ainda não configurado; seus dados estão seguros neste dispositivo'}</small></div>{user ? <button className="secondary" onClick={() => signOut(auth)}><LogOut size={16}/> Sair</button> : <button className="primary" disabled={!firebaseReady} onClick={() => loginWithGoogle().catch((e) => toast(e.message))}>Entrar</button>}</section><button className="settings-card clickable" onClick={() => open({ type: 'prompt' })}><span className="card-icon"><ClipboardCopy/></span><div className="grow"><b>Prompt para leitura da nota</b><small>Copie o formato esperado e use na IA de sua preferência</small></div><ChevronRight/></button><section className="settings-card"><span className="card-icon"><CloudOff/></span><div><b>PWA e modo offline</b><small>A lista permanece disponível sem conexão. A sincronização ocorre ao voltar.</small></div></section></div></> }
 
 function InlineProductSearch({ products, list, state, onAdd }) {
   const [query, setQuery] = useState('')
@@ -298,37 +366,62 @@ function InlineProductSearch({ products, list, state, onAdd }) {
 
 function SuggestionButton({ product, alreadyAdded = false, onAdd, meta }) { return <button className={`category-${categoryKey(product.category)}`} role="option" aria-selected={alreadyAdded} disabled={alreadyAdded} onClick={() => onAdd(product)}><CategoryIcon category={product.category}/><span className="grow"><b>{product.name}</b><small>{meta || `${product.category} · ${product.defaultUnit || defaultUnitForProduct(product.name, product.category)}`}</small></span>{alreadyAdded ? <span className="added-label"><Check size={15}/> Na lista</span> : <Plus size={19}/>}</button> }
 
-function ItemPanel({ item: initial, state, onClose, onSave }) {
+function ItemPanel({ item: initial, onClose, onSave }) {
   const [item, setItem] = useState(initial)
-  const [updateCatalog, setUpdateCatalog] = useState(false)
-  const history = purchaseHistoryFor(state, initial.name)
-  const catalogProduct = state.products.find((product) => normalizeText(product.name) === normalizeText(initial.name))
-  const catalogChanged = !catalogProduct || normalizeText(item.name) !== normalizeText(catalogProduct.name) || item.category !== catalogProduct.category || item.unit !== (catalogProduct.defaultUnit || defaultUnitForProduct(catalogProduct.name, catalogProduct.category))
   const submit = (event) => {
     event.preventDefault()
-    if (!item.name.trim()) return
-    onSave({ ...item, name: item.name.trim(), quantity: Math.max(0.1, Number(item.quantity) || 1) }, updateCatalog && catalogChanged)
+    onSave({ ...item, quantity: Math.max(0.1, Number(item.quantity) || 1), note: (item.note || '').trim() })
   }
-  return <Modal title="Editar item" subtitle="As alterações valem somente para esta lista, a menos que você escolha atualizar o catálogo." onClose={onClose} wide>
+  return <Modal title="Editar item da lista" subtitle="Quantidade e nota valem somente para esta lista." onClose={onClose}>
+    <form onSubmit={submit}>
+      <div className={`list-item-edit-heading category-${categoryKey(item.category)}`}><CategoryIcon category={item.category}/><div><b>{item.name}</b><small>{item.category} · {item.unit}</small></div></div>
+      <Field label="Quantidade"><div className="quantity-field"><input autoFocus type="number" min="0.1" step="0.1" value={item.quantity} onChange={(event) => setItem({ ...item, quantity: event.target.value })}/><span>{item.unit}</span></div></Field>
+      <Field label="Nota para esta lista (opcional)"><textarea rows="3" value={item.note || ''} onChange={(event) => setItem({ ...item, note: event.target.value })} placeholder="Ex.: comprar para o almoço de domingo"/><small>A nota será apagada quando o item sair da lista.</small></Field>
+      <div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary"><Check size={17}/> Salvar</button></div>
+    </form>
+  </Modal>
+}
+
+function ProductPanel({ product: initial, state, onClose, onSave }) {
+  const [product, setProduct] = useState({ ...initial, variants: normalizeProductVariants(initial.variants) })
+  const history = purchaseHistoryFor(state, initial.name)
+  const recurrenceValue = product.recurrenceDays == null ? 'auto' : String(product.recurrenceDays)
+  const customRecurrence = PERIODICITY_OPTIONS.every((option) => option.value !== recurrenceValue)
+  const updateVariant = (id, patch) => setProduct((current) => ({ ...current, variants: current.variants.map((variant) => variant.id === id ? { ...variant, ...patch } : variant) }))
+  const removeVariant = (id) => setProduct((current) => ({ ...current, variants: current.variants.filter((variant) => variant.id !== id) }))
+  const addVariant = () => setProduct((current) => ({ ...current, variants: [...current.variants, { id: uid(), brand: '', packageSize: 1, packageUnit: 'un', barcode: '', createdAt: nowIso() }] }))
+  const submit = (event) => {
+    event.preventDefault()
+    if (!product.name.trim()) return
+    onSave({
+      ...product,
+      name: product.name.trim(),
+      category: product.category || 'Outros',
+      defaultUnit: product.defaultUnit || defaultUnitForProduct(product.name, product.category),
+      variants: product.variants.map((variant) => ({ ...variant, brand: (variant.brand || '').trim(), packageSize: Math.max(0.001, Number(variant.packageSize) || 1) })),
+      brands: [...new Set(product.variants.map((variant) => (variant.brand || '').trim()).filter(Boolean))],
+    })
+  }
+  return <Modal title="Editar produto" subtitle="As alterações valem para o catálogo, sugestões e futuras listas." onClose={onClose} wide>
     <form onSubmit={submit}>
       <div className="item-edit-primary">
-        <Field label="Produto"><input autoFocus required value={item.name} onChange={(event) => setItem({ ...item, name: event.target.value })} placeholder="Ex.: Arroz"/></Field>
-        <div className="form-grid"><Field label="Quantidade"><input type="number" min="0.1" step="0.1" value={item.quantity} onChange={(event) => setItem({ ...item, quantity: event.target.value })}/></Field><Field label="Unidade"><select value={item.unit} onChange={(event) => setItem({ ...item, unit: event.target.value })}>{UNITS.map((unit) => <option key={unit}>{unit}</option>)}</select></Field></div>
+        <Field label="Produto"><input autoFocus required value={product.name} onChange={(event) => setProduct({ ...product, name: event.target.value })} placeholder="Ex.: Arroz"/></Field>
+        <div className="form-grid"><Field label="Categoria"><select value={product.category || 'Outros'} onChange={(event) => setProduct({ ...product, category: event.target.value })}>{CATEGORIES.map((category) => <option key={category}>{category}</option>)}</select></Field><Field label="Unidade padrão"><select value={product.defaultUnit || 'un'} onChange={(event) => setProduct({ ...product, defaultUnit: event.target.value })}>{UNITS.map((unit) => <option key={unit}>{unit}</option>)}</select></Field></div>
       </div>
 
-      <details className="item-edit-section">
-        <summary><span><b>Mais detalhes</b><small>Categoria, marca e observação</small></span><ChevronRight size={18}/></summary>
-        <div className="item-edit-section-body"><Field label="Categoria"><select value={item.category} onChange={(event) => setItem({ ...item, category: event.target.value })}>{CATEGORIES.map((category) => <option key={category}>{category}</option>)}</select></Field><Field label="Marca desejada (opcional)"><input value={item.brand || ''} onChange={(event) => setItem({ ...item, brand: event.target.value })} placeholder="Pode ser definida na compra"/></Field><Field label="Observação (opcional)"><input value={item.note || ''} onChange={(event) => setItem({ ...item, note: event.target.value })}/></Field></div>
+      <details className="item-edit-section" open>
+        <summary><span><b>Reposição</b><small>Quando o produto deve voltar às sugestões</small></span><ChevronRight size={18}/></summary>
+        <div className="item-edit-section-body"><Field label="Periodicidade"><select value={recurrenceValue} onChange={(event) => setProduct({ ...product, recurrenceDays: event.target.value === 'auto' ? null : Number(event.target.value) })}>{PERIODICITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}{customRecurrence && <option value={recurrenceValue}>A cada {recurrenceValue} dias</option>}</select></Field></div>
       </details>
 
-      {catalogChanged && <label className={`catalog-update-option ${updateCatalog ? 'selected' : ''}`}><input type="checkbox" checked={updateCatalog} onChange={(event) => setUpdateCatalog(event.target.checked)}/><span className="catalog-update-check">{updateCatalog && <Check size={15}/>}</span><span><b>Atualizar também no catálogo</b><small>Aplica nome, categoria e unidade padrão às sugestões e às futuras listas. Compras anteriores não serão alteradas.</small></span></label>}
+      <section className="variant-editor-section"><div className="variant-editor-heading"><div><b>Variações de compra</b><small>São atualizadas automaticamente ao registrar compras.</small></div><button type="button" className="secondary" onClick={addVariant}><Plus size={16}/> Adicionar</button></div>{product.variants.length ? <div className="variant-editor-list">{product.variants.map((variant) => { const variantHistory = purchaseHistoryForVariant(state, initial, variant); const latest = variantHistory[0]; return <article className="variant-editor-card" key={variant.id}><div className="variant-editor-card-heading"><div><b>{variant.brand || 'Sem marca'}</b><small>{variant.packageSize} {variant.packageUnit}{latest ? ` · última compra ${shortDate(latest.purchase.purchasedAt)}` : ''}</small></div><button type="button" className="icon-button danger" aria-label="Remover variação" title="Remover variação" onClick={() => removeVariant(variant.id)}><Trash2 size={16}/></button></div><div className="variant-fields"><Field label="Marca"><input value={variant.brand || ''} onChange={(event) => updateVariant(variant.id, { brand: event.target.value })} placeholder="Sem marca"/></Field><Field label="Embalagem"><div className="joined"><input type="number" min="0.001" step="0.001" value={variant.packageSize} onChange={(event) => updateVariant(variant.id, { packageSize: event.target.value })}/><select value={variant.packageUnit} onChange={(event) => updateVariant(variant.id, { packageUnit: event.target.value })}>{['un','kg','g','L','ml'].map((unit) => <option key={unit}>{unit}</option>)}</select></div></Field></div>{latest && <div className="variant-latest"><span>{variantHistory.length} {variantHistory.length === 1 ? 'compra' : 'compras'} no histórico</span><strong>Último preço: {money(latest.item.unitPrice || latest.item.totalPrice / (Number(latest.item.quantity) || 1))}</strong></div>}</article> })}</div> : <p className="variant-empty">Nenhuma variação registrada ainda. Elas aparecerão aqui depois da primeira compra.</p>}</section>
 
       <details className="item-edit-section history-section">
         <summary><span><b>Histórico de compras</b><small>{history.length} {history.length === 1 ? 'registro' : 'registros'}</small></span><ChevronRight size={18}/></summary>
         <div className="item-edit-section-body">{history.length ? <div className="item-history">{history.map(({ purchase, item: bought }) => { const normalized = normalizedPrice(bought); return <article key={`${purchase.id}-${bought.id}`}><div><b>{shortDate(purchase.purchasedAt)} · {purchase.marketName}</b><small>{bought.brand || 'Sem marca informada'} · {bought.quantity} × {bought.packageSize} {bought.packageUnit}</small>{normalized && <em>{money(normalized.value)} / {normalized.unit}</em>}</div><strong>{money(bought.totalPrice)}</strong></article> })}</div> : <p className="collapsed-empty">Nenhuma compra anterior encontrada para {initial.name}.</p>}</div>
       </details>
 
-      <div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary"><Check size={17}/> Salvar</button></div>
+      <div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary"><Check size={17}/> Salvar alterações</button></div>
     </form>
   </Modal>
 }
@@ -392,11 +485,6 @@ function PurchaseDetail({ purchase, market, onClose, onEdit }) { return <Modal t
 function PromptModal({ onClose, toast }) { return <Modal title="Prompt para leitura da nota" subtitle="Anexe a foto da nota à IA e envie este texto." onClose={onClose} wide><pre className="prompt-box">{RECEIPT_PROMPT}</pre><div className="modal-actions"><button className="secondary" onClick={onClose}>Fechar</button><button className="primary" onClick={() => navigator.clipboard.writeText(RECEIPT_PROMPT).then(() => toast('Prompt copiado.'))}><ClipboardCopy size={17}/> Copiar prompt</button></div></Modal> }
 
 function updateItem(items, setter, id, patch) { setter(items.map((item) => item.id === id ? { ...item, ...patch } : item)) }
-function updateCatalogProduct(products, originalName, item) {
-  const existing = products.find((product) => normalizeText(product.name) === normalizeText(originalName))
-  if (!existing) return [...products, { id: uid(), name: item.name, category: item.category || 'Outros', defaultUnit: item.unit || 'un', brands: [item.brand].filter(Boolean), variants: [], archivedAt: null, createdAt: nowIso() }]
-  return products.map((product) => product.id === existing.id ? { ...product, name: item.name, category: item.category || 'Outros', defaultUnit: item.unit || 'un', archivedAt: null } : product)
-}
 const CATEGORY_EMOJIS = { Hortifruti: '🥬', Mercearia: '🥫', Frios: '🧀', Carnes: '🥩', Bebidas: '🥤', Limpeza: '🧹', Higiene: '🧴', Outros: '📦' }
 function shoppingListShareText(items, scope) {
   const selected = scope === 'missing' ? items.filter((item) => !item.checked) : items
@@ -407,7 +495,7 @@ function shoppingListShareText(items, scope) {
     const categoryItems = selected.filter((item) => (item.category || 'Outros') === category)
     if (!categoryItems.length) return null
     const lines = categoryItems.map((item) => {
-      const details = [`${item.quantity} ${item.unit}`, item.brand, item.note].filter(Boolean).join(' · ')
+      const details = [`${item.quantity} ${item.unit}`, item.note].filter(Boolean).join(' · ')
       return `${item.checked ? '✅' : '⬜'} ${item.name}${details ? ` — ${details}` : ''}`
     })
     return `${CATEGORY_EMOJIS[category] || CATEGORY_EMOJIS.Outros} ${category}\n${lines.join('\n')}`
@@ -426,8 +514,36 @@ async function copyText(text) {
   textarea.remove()
 }
 function findOrCreateMarketId(markets, market) { const cnpj = onlyDigits(market.cnpj); return markets.find((item) => (cnpj && onlyDigits(item.cnpj) === cnpj) || (!cnpj && normalizeText(item.name) === normalizeText(market.name)))?.id || uid() }
-function mergeProducts(products, items) { let result = [...products]; items.forEach((item) => { const key = normalizeText(item.productName); const existing = result.find((p) => normalizeText(p.name) === key); const variant = `${normalizeText(item.brand)}|${item.packageSize}|${item.packageUnit}`; if (existing) result = result.map((p) => p.id === existing.id ? { ...p, archivedAt: null, brands: [...new Set([...(p.brands || []), item.brand].filter(Boolean))], variants: [...new Set([...(p.variants || []), variant])], category: p.category === 'Outros' ? item.category : p.category, defaultUnit: p.defaultUnit || defaultUnitForProduct(item.productName, item.category) } : p); else result.push({ id: uid(), name: item.productName, category: item.category || 'Outros', defaultUnit: defaultUnitForProduct(item.productName, item.category), brands: [item.brand].filter(Boolean), variants: [variant], archivedAt: null, createdAt: nowIso() }) }); return result }
-function latestPurchaseInfo(state, name) { for (const purchase of state.purchases) { const item = purchase.items.find((i) => normalizeText(i.productName) === normalizeText(name)); if (item) return { item, purchase } } return null }
+function normalizeProductVariants(variants = []) {
+  return variants.map((variant) => {
+    if (typeof variant === 'object' && variant) return { packageSize: 1, packageUnit: 'un', brand: '', barcode: '', ...variant, id: variant.id || uid() }
+    const [brand = '', packageSize = '1', packageUnit = 'un'] = String(variant || '').split('|')
+    return { id: uid(), brand, packageSize: Number(packageSize) || 1, packageUnit: packageUnit || 'un', barcode: '', createdAt: nowIso() }
+  })
+}
+function variantMatchesItem(variant, item) {
+  return normalizeText(variant.brand) === normalizeText(item.brand) && Number(variant.packageSize || 1) === Number(item.packageSize || 1) && variant.packageUnit === (item.packageUnit || 'un')
+}
+function mergeProducts(products, items, purchaseMeta) {
+  let result = products.map((product) => ({ ...product, variants: normalizeProductVariants(product.variants) }))
+  const linkedItems = items.map((item) => {
+    const productKey = normalizeText(item.productName)
+    let product = result.find((saved) => normalizeText(saved.name) === productKey)
+    if (!product) {
+      product = { id: uid(), name: item.productName, category: item.category || 'Outros', defaultUnit: defaultUnitForProduct(item.productName, item.category), brands: [], variants: [], archivedAt: null, createdAt: nowIso() }
+      result.push(product)
+    }
+    const variants = normalizeProductVariants(product.variants)
+    let variant = variants.find((saved) => saved.id === item.variantId || variantMatchesItem(saved, item))
+    if (!variant) variant = { id: uid(), brand: item.brand || '', packageSize: Number(item.packageSize) || 1, packageUnit: item.packageUnit || 'un', barcode: item.barcode || '', createdAt: nowIso() }
+    const updatedVariant = { ...variant, brand: item.brand || variant.brand || '', packageSize: Number(item.packageSize) || 1, packageUnit: item.packageUnit || 'un', barcode: item.barcode || variant.barcode || '', lastPrice: Number(item.unitPrice) || Number(item.totalPrice) / (Number(item.quantity) || 1), lastPurchasedAt: purchaseMeta.purchasedAt, lastMarketName: purchaseMeta.marketName, updatedAt: nowIso() }
+    const updatedVariants = variants.some((saved) => saved.id === updatedVariant.id) ? variants.map((saved) => saved.id === updatedVariant.id ? updatedVariant : saved) : [...variants, updatedVariant]
+    product = { ...product, archivedAt: null, category: product.category === 'Outros' ? item.category : product.category, defaultUnit: product.defaultUnit || defaultUnitForProduct(item.productName, item.category), variants: updatedVariants, brands: [...new Set(updatedVariants.map((saved) => saved.brand).filter(Boolean))] }
+    result = result.map((saved) => saved.id === product.id ? product : saved)
+    return { ...item, productId: product.id, variantId: updatedVariant.id }
+  })
+  return { products: result, items: linkedItems }
+}
 function purchasesForProduct(state, name) { return state.purchases.filter((purchase) => purchase.items.some((item) => normalizeText(item.productName) === normalizeText(name))).sort((a, b) => new Date(b.purchasedAt) - new Date(a.purchasedAt)) }
 function categoryDefaultDays(category) { return ({ Hortifruti: 7, Frios: 7, Carnes: 14, Mercearia: 30, Bebidas: 30, Limpeza: 60, Higiene: 60, Outros: 30 })[category] || 30 }
 function nearestPeriod(days) { return [7, 14, 30, 60, 90].reduce((best, value) => Math.abs(value - days) < Math.abs(best - days) ? value : best, 30) }
@@ -471,7 +587,74 @@ function groupedProductSuggestions(state, list) {
   })
   return groups.map((group) => ({ ...group, products: group.products.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')).slice(0, 10) })).filter((group) => group.products.length)
 }
-function productToListItem(state, product) { const last = latestPurchaseInfo(state, product.name)?.item; return { id: uid(), name: product.name, quantity: 1, unit: product.defaultUnit || defaultUnitForProduct(product.name, product.category), category: product.category || 'Outros', brand: last?.brand || '', note: '', checked: false } }
+function productToListItem(product) { return { id: uid(), productId: product.id, name: product.name, quantity: 1, unit: product.defaultUnit || defaultUnitForProduct(product.name, product.category), category: product.category || 'Outros', note: '', checked: false } }
 function purchaseHistoryFor(state, name) { return state.purchases.flatMap((purchase) => purchase.items.filter((item) => normalizeText(item.productName) === normalizeText(name)).map((item) => ({ purchase, item }))).sort((a, b) => new Date(b.purchase.purchasedAt) - new Date(a.purchase.purchasedAt)) }
+function purchaseHistoryForVariant(state, product, variant) { return state.purchases.flatMap((purchase) => purchase.items.filter((item) => item.variantId ? item.variantId === variant.id : normalizeText(item.productName) === normalizeText(product.name) && variantMatchesItem(variant, item)).map((item) => ({ purchase, item }))).sort((a, b) => new Date(b.purchase.purchasedAt) - new Date(a.purchase.purchasedAt)) }
 function categoryKey(category = 'Outros') { return normalizeText(category).replace(/\s+/g, '-') }
 function priceRows(state) { const groups = new Map(); state.purchases.forEach((purchase) => purchase.items.forEach((item) => { const key = normalizeText(item.productName); const norm = normalizedPrice(item); const value = norm?.value || Number(item.totalPrice) / (Number(item.quantity) || 1); const current = groups.get(key) || { name: item.productName, category: item.category || 'Outros', entries: [] }; current.entries.push({ value, raw: Number(item.totalPrice), unit: norm?.unit, date: purchase.purchasedAt, market: purchase.marketName }); groups.set(key, current) })); return [...groups.values()].map((group) => { const sorted = [...group.entries].sort((a,b) => new Date(b.date)-new Date(a.date)); const comparable = group.entries.filter((e) => e.unit && e.unit === group.entries.find((x) => x.unit)?.unit); return { name: group.name, category: group.category, count: group.entries.length, latest: sorted[0].raw, latestDate: sorted[0].date, min: Math.min(...group.entries.map((e) => e.raw)), max: Math.max(...group.entries.map((e) => e.raw)), normalizedMin: comparable.length ? Math.min(...comparable.map((e) => e.value)) : null, unit: comparable[0]?.unit, markets: [...new Set(group.entries.map((e) => e.market))] } }).sort((a,b) => a.name.localeCompare(b.name)) }
+
+function analyticsData(state, allPurchases = state.purchases, period = 'all') {
+  const purchases = [...state.purchases].sort((a, b) => new Date(b.purchasedAt) - new Date(a.purchasedAt))
+  const totalSpent = purchases.reduce((sum, purchase) => sum + Number(purchase.total || 0), 0)
+  const itemCount = purchases.reduce((sum, purchase) => sum + purchase.items.length, 0)
+  const productNames = new Set(purchases.flatMap((purchase) => purchase.items.map((item) => normalizeText(item.productName))))
+  const marketMap = new Map()
+  const categoryMap = new Map()
+
+  purchases.forEach((purchase) => {
+    const marketName = purchase.marketName || 'Mercado não identificado'
+    const market = marketMap.get(marketName) || { name: marketName, total: 0, count: 0, itemCount: 0, latestDate: purchase.purchasedAt }
+    market.total += Number(purchase.total || 0)
+    market.count += 1
+    market.itemCount += purchase.items.length
+    if (new Date(purchase.purchasedAt) > new Date(market.latestDate)) market.latestDate = purchase.purchasedAt
+    marketMap.set(marketName, market)
+
+    purchase.items.forEach((item) => {
+      const name = CATEGORIES.includes(item.category) ? item.category : 'Outros'
+      const category = categoryMap.get(name) || { name, total: 0, itemCount: 0 }
+      category.total += Number(item.totalPrice || 0)
+      category.itemCount += 1
+      categoryMap.set(name, category)
+    })
+  })
+
+  const markets = [...marketMap.values()].map((market) => ({ ...market, average: market.total / market.count })).sort((a, b) => b.total - a.total)
+  const categories = [...categoryMap.values()].map((category) => ({ ...category, averageItem: category.total / category.itemCount })).sort((a, b) => b.total - a.total)
+  const spendingComparison = periodComparison(allPurchases, period, totalSpent)
+  const biggestVariation = priceRows(state).filter((row) => row.count > 1 && row.min > 0).map((row) => ({ ...row, variation: (row.max - row.min) / row.min * 100 })).sort((a, b) => b.variation - a.variation)[0]
+
+  return {
+    totalSpent,
+    purchaseCount: purchases.length,
+    averageTicket: purchases.length ? totalSpent / purchases.length : 0,
+    itemCount,
+    itemsPerPurchase: purchases.length ? itemCount / purchases.length : 0,
+    uniqueProducts: productNames.size,
+    recentPurchases: purchases.slice(0, 6),
+    markets,
+    categories,
+    spendingComparison,
+    biggestVariation,
+  }
+}
+
+function filterPurchasesByPeriod(purchases, period) {
+  if (period === 'all') return purchases
+  const start = periodStart(period)
+  return purchases.filter((purchase) => new Date(purchase.purchasedAt) >= start)
+}
+
+function periodComparison(purchases, period, currentTotal) {
+  if (period === 'all') return `${purchases.length} ${purchases.length === 1 ? 'compra no histórico' : 'compras no histórico'}`
+  const currentStart = periodStart(period)
+  const previousStart = new Date(currentStart)
+  previousStart.setDate(previousStart.getDate() - Number(period))
+  const previousTotal = purchases.filter((purchase) => { const date = new Date(purchase.purchasedAt); return date >= previousStart && date < currentStart }).reduce((sum, purchase) => sum + Number(purchase.total || 0), 0)
+  if (!previousTotal) return `${money(currentTotal)} no período selecionado`
+  const variation = (currentTotal - previousTotal) / previousTotal * 100
+  return `${variation >= 0 ? '+' : ''}${formatNumber(variation, 0)}% vs. período anterior`
+}
+
+function periodStart(period) { const date = new Date(); date.setHours(0, 0, 0, 0); date.setDate(date.getDate() - Number(period)); return date }
+function formatNumber(value, digits = 0) { return new Intl.NumberFormat('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(Number(value) || 0) }
