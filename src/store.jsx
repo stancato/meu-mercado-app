@@ -11,8 +11,7 @@ const normalizeState = (value = {}) => {
   const uniqueItems = []
   oldLists.flatMap((list) => list.items || []).forEach((item) => {
     if (!uniqueItems.some((saved) => saved.name?.toLocaleLowerCase() === item.name?.toLocaleLowerCase())) {
-      const { checked: _legacyChecked, ...listItem } = item
-      uniqueItems.push(listItem)
+      uniqueItems.push({ ...item, checked: Boolean(item.checked) })
     }
   })
   const savedProducts = Array.isArray(merged.products) ? merged.products : []

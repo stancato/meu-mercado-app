@@ -119,19 +119,23 @@ function ShoppingListPage({ state, mutate, open }) {
       lists: s.lists.map((current) => ({ ...current, items: [...current.items, productToListItem(product)] })),
     }
   })
-  const changeQuantity = (itemId, amount) => mutate((s) => ({ ...s, lists: s.lists.map((current) => ({ ...current, items: current.items.map((item) => item.id === itemId ? { ...item, quantity: Math.max(0.1, Math.round((Number(amount) || 1) * 100) / 100) } : item) })) }))
   const toggleCompleted = (itemId) => mutate((s) => ({ ...s, lists: s.lists.map((current) => ({ ...current, items: current.items.map((item) => item.id === itemId ? { ...item, checked: !item.checked } : item) })) }))
-  const renderItem = (item) => <ShoppingListItem key={item.id} item={item} viewMode={viewMode} onToggle={() => toggleCompleted(item.id)} onChangeQuantity={(amount) => changeQuantity(item.id, amount)} onOpenEdit={() => open({ type: 'item', item })}/>
-  const groups = CATEGORIES.map((category) => ({ category, items: list.items.filter((item) => category === 'Outros' ? !CATEGORIES.includes(item.category || 'Outros') || (item.category || 'Outros') === 'Outros' : item.category === category) }))
+  const renderItem = (item) => <ShoppingListItem key={item.id} item={item} viewMode={viewMode} onToggle={() => toggleCompleted(item.id)} onOpenEdit={() => open({ type: 'item', item })}/>
+  const pendingItems = list.items.filter((item) => !item.checked)
+  const completedItems = list.items.filter((item) => item.checked)
+  const groups = CATEGORIES.map((category) => ({ category, items: pendingItems.filter((item) => category === 'Outros' ? !CATEGORIES.includes(item.category || 'Outros') || (item.category || 'Outros') === 'Outros' : item.category === category) }))
     .filter((group) => group.items.length)
   return <><PageHeader title="Lista de mercado"/>
     <InlineProductSearch products={state.products} list={list} state={state} onAdd={addProduct}/>
     <div className="toolbar shopping-list-toolbar"><span className="list-count">{list.items.length} {list.items.length === 1 ? 'item' : 'itens'}</span><div className="list-view-actions">{list.items.length > 0 && <button className="share-list-button" aria-label="Compartilhar lista" title="Compartilhar lista" onClick={() => open({ type: 'share-list' })}><Share2 size={16}/><span>Compartilhar</span></button>}<button className={`group-toggle ${groupByCategory ? 'active' : ''}`} aria-label="Agrupar por categoria" title="Agrupar por categoria" aria-pressed={groupByCategory} onClick={() => setGroupByCategory((current) => !current)}><Tags size={16}/><span>Agrupar por categoria</span></button><div className="view-toggle" aria-label="Modo de visualização"><button className={viewMode === 'list' ? 'active' : ''} title="Visualizar em lista" aria-label="Visualizar em lista" aria-pressed={viewMode === 'list'} onClick={() => setViewMode('list')}><List size={18}/></button><button className={viewMode === 'grid' ? 'active' : ''} title="Visualizar em grade" aria-label="Visualizar em grade" aria-pressed={viewMode === 'grid'} onClick={() => setViewMode('grid')}><LayoutGrid size={18}/></button></div></div></div>
-    {list.items.length ? (groupByCategory ? <div className="category-groups">{groups.map((group) => <section className={`category-group category-${categoryKey(group.category)}`} key={group.category}><header><CategoryIcon category={group.category} size={17}/><div><h2>{group.category}</h2><span>{group.items.length} {group.items.length === 1 ? 'item' : 'itens'}</span></div></header><div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{group.items.map(renderItem)}</div></section>)}</div> : <div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{list.items.map(renderItem)}</div>) : <Empty icon={ShoppingBasket} title="Sua lista está vazia" text="Use a busca acima para adicionar o primeiro produto."/>}
+    {list.items.length ? <div className="shopping-list-content">
+      {pendingItems.length > 0 && (groupByCategory ? <div className="category-groups">{groups.map((group) => <section className={`category-group category-${categoryKey(group.category)}`} key={group.category}><header><CategoryIcon category={group.category} size={17}/><div><h2>{group.category}</h2><span>{group.items.length} {group.items.length === 1 ? 'item' : 'itens'}</span></div></header><div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{group.items.map(renderItem)}</div></section>)}</div> : <div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{pendingItems.map(renderItem)}</div>)}
+      {completedItems.length > 0 && <section className="completed-items-group"><header><div><h2>Concluídos</h2><span>{completedItems.length} {completedItems.length === 1 ? 'item' : 'itens'}</span></div></header><div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{completedItems.map(renderItem)}</div></section>}
+    </div> : <Empty icon={ShoppingBasket} title="Sua lista está vazia" text="Use a busca acima para adicionar o primeiro produto."/>}
   </>
 }
 
-function ShoppingListItem({ item, viewMode, onToggle, onChangeQuantity, onOpenEdit }) {
+function ShoppingListItem({ item, viewMode, onToggle, onOpenEdit }) {
   const pressTimer = useRef(null)
   const pressStart = useRef(null)
   const longPressed = useRef(false)
@@ -169,7 +173,7 @@ function ShoppingListItem({ item, viewMode, onToggle, onChangeQuantity, onOpenEd
   }
   const variantLabel = [item.variety, item.brand].filter(Boolean).join(' · ')
   return <article className={`item-row simple category-${categoryKey(item.category)} ${item.checked ? 'checked' : ''}`} tabIndex="0" aria-label={`${item.name}. ${item.checked ? 'Concluído' : 'Pendente'}. Toque para marcar; segure para editar.`} onClick={clickItem} onKeyDown={keyDown} onContextMenu={openContextMenu} onPointerDown={startPress} onPointerMove={movePress} onPointerUp={finishPress} onPointerCancel={finishPress}>
-    <span className="check" aria-hidden="true">{item.checked && <Check size={15}/>}</span><CategoryIcon category={item.category}/><div className="item-main"><b>{item.name}</b>{variantLabel && <small className="item-variant">{variantLabel}</small>}{item.note ? <small className="item-note">{item.note}</small> : viewMode === 'grid' && !variantLabel && <small>{item.category}</small>}</div><div className="quantity-stepper"><button aria-label={`Diminuir quantidade de ${item.name}`} onClick={(event) => { event.stopPropagation(); onChangeQuantity(Number(item.quantity) - 1) }}>−</button><input aria-label={`Quantidade de ${item.name}`} type="number" min="0.1" step="1" value={item.quantity} onClick={(event) => event.stopPropagation()} onChange={(event) => onChangeQuantity(event.target.value)}/><span>{item.unit}</span><button aria-label={`Aumentar quantidade de ${item.name}`} onClick={(event) => { event.stopPropagation(); onChangeQuantity(Number(item.quantity) + 1) }}>+</button></div>
+    <CategoryIcon category={item.category}/><div className="item-main"><b>{item.name}</b>{variantLabel && <small className="item-variant">{variantLabel}</small>}{item.note ? <small className="item-note">{item.note}</small> : viewMode === 'grid' && !variantLabel && <small>{item.category}</small>}</div><span className="item-quantity" aria-label={`Quantidade: ${item.quantity} ${item.unit}`}>{item.quantity} {item.unit}</span>
   </article>
 }
 
