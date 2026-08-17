@@ -10,7 +10,10 @@ const normalizeState = (value = {}) => {
   const oldLists = Array.isArray(merged.lists) ? merged.lists : []
   const uniqueItems = []
   oldLists.flatMap((list) => list.items || []).forEach((item) => {
-    if (!uniqueItems.some((saved) => saved.name?.toLocaleLowerCase() === item.name?.toLocaleLowerCase())) {
+    const itemKey = item.variantId
+      ? `${item.productId || normalizeText(item.name)}|variant:${item.variantId}`
+      : `${item.productId || normalizeText(item.name)}|base`
+    if (!uniqueItems.some((saved) => (saved.variantId ? `${saved.productId || normalizeText(saved.name)}|variant:${saved.variantId}` : `${saved.productId || normalizeText(saved.name)}|base`) === itemKey)) {
       uniqueItems.push({ ...item, checked: Boolean(item.checked) })
     }
   })
