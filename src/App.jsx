@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Apple, Archive, ArrowLeftRight, BarChart3, Bath, Beef, CalendarClock, Check, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, GitMerge, LayoutGrid, List, ListChecks, LogIn, LogOut, Milk, Package, PackageCheck, PackagePlus, PackageSearch, Pencil, Plus, ReceiptText, Search, Settings, Share2, ShoppingBasket, SprayCan, Store, Tags, Trash2, TrendingUp, X } from 'lucide-react'
+import { AlertTriangle, Apple, Archive, ArrowLeftRight, BarChart3, Bath, Beef, CalendarClock, Check, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, Eye, EyeOff, GitMerge, LayoutGrid, List, ListChecks, LogIn, LogOut, Milk, Package, PackageCheck, PackagePlus, PackageSearch, Pencil, Plus, ReceiptText, Search, Settings, Share2, ShoppingBasket, SprayCan, Store, Tags, Trash2, TrendingUp, X } from 'lucide-react'
 import { signOut } from 'firebase/auth'
 import { auth, firebaseReady, loginWithGoogle } from './firebase'
 import { CATEGORIES, RECEIPT_PROMPT, UNITS, dateTimeLocal, defaultUnitForProduct, money, normalizeImport, normalizeText, normalizedPrice, nowIso, onlyDigits, parseJsonInput, shortDate, uid } from './data'
@@ -107,8 +107,10 @@ function ShoppingListPage({ state, mutate, open }) {
   const list = state.lists[0]
   const [viewMode, setViewMode] = useState(() => localStorage.getItem('shopping-list-view') || 'list')
   const [groupByCategory, setGroupByCategory] = useState(() => localStorage.getItem('shopping-list-grouped') === 'true')
+  const [showItemEstimates, setShowItemEstimates] = useState(() => localStorage.getItem('shopping-list-item-estimates') === 'true')
   useEffect(() => localStorage.setItem('shopping-list-view', viewMode), [viewMode])
   useEffect(() => localStorage.setItem('shopping-list-grouped', String(groupByCategory)), [groupByCategory])
+  useEffect(() => localStorage.setItem('shopping-list-item-estimates', String(showItemEstimates)), [showItemEstimates])
   const addProduct = (product) => mutate((s) => {
     const productKey = normalizeText(product.name)
     const existsInCatalog = s.products.some((saved) => normalizeText(saved.name) === productKey)
@@ -121,15 +123,22 @@ function ShoppingListPage({ state, mutate, open }) {
     }
   })
   const toggleCompleted = (itemId) => mutate((s) => ({ ...s, lists: s.lists.map((current) => ({ ...current, items: current.items.map((item) => item.id === itemId ? { ...item, checked: !item.checked } : item) })) }))
-  const renderItem = (item) => <ShoppingListItem key={item.id} item={item} onToggle={() => toggleCompleted(item.id)} onOpenEdit={() => open({ type: 'item', item })}/>
+  const renderItem = (item) => <ShoppingListItem key={item.id} item={item} estimatedPrice={showItemEstimates ? estimatedPriceForListItem(state, item) : null} showEstimate={showItemEstimates} onToggle={() => toggleCompleted(item.id)} onOpenEdit={() => open({ type: 'item', item })}/>
   const pendingItems = list.items.filter((item) => !item.checked)
   const completedItems = list.items.filter((item) => item.checked)
+  const estimate = useMemo(() => estimateShoppingList(state, list), [state, list])
   const groups = CATEGORIES.map((category) => ({ category, items: pendingItems.filter((item) => category === 'Outros' ? !CATEGORIES.includes(item.category || 'Outros') || (item.category || 'Outros') === 'Outros' : item.category === category) }))
     .filter((group) => group.items.length)
   const clearCompleted = () => mutate((s) => ({ ...s, lists: s.lists.map((current) => ({ ...current, items: current.items.filter((item) => !item.checked) })) }))
   return <><PageHeader title="Lista de mercado"/>
     <div className="shopping-list-search-controls"><InlineProductSearch products={state.products} list={list} state={state} onAdd={addProduct}/></div>
     <div className="toolbar shopping-list-toolbar"><span className="list-count">{list.items.length} {list.items.length === 1 ? 'item' : 'itens'}</span><div className="list-view-actions">{list.items.length > 0 && <button className="share-list-button" aria-label="Compartilhar lista" title="Compartilhar lista" onClick={() => open({ type: 'share-list' })}><Share2 size={16}/><span>Compartilhar</span></button>}<button className={`group-toggle ${groupByCategory ? 'active' : ''}`} aria-label="Agrupar por categoria" title="Agrupar por categoria" aria-pressed={groupByCategory} onClick={() => setGroupByCategory((current) => !current)}><Tags size={16}/><span>Agrupar por categoria</span></button><div className="view-toggle" aria-label="Modo de visualização"><button className={viewMode === 'list' ? 'active' : ''} title="Visualizar em lista" aria-label="Visualizar em lista" aria-pressed={viewMode === 'list'} onClick={() => setViewMode('list')}><List size={18}/></button><button className={viewMode === 'grid' ? 'active' : ''} title="Visualizar em grade" aria-label="Visualizar em grade" aria-pressed={viewMode === 'grid'} onClick={() => setViewMode('grid')}><LayoutGrid size={18}/></button></div></div></div>
+    {list.items.length > 0 && <section className={`shopping-estimate ${estimate.pricedCount ? '' : 'empty'}`} aria-label="Estimativa do valor da compra">
+      <span className="shopping-estimate-icon"><CircleDollarSign size={18}/></span>
+      <div><small>Total estimado da compra</small><strong>{estimate.pricedCount ? money(estimate.total) : 'Sem estimativa'}</strong></div>
+      <p>{estimate.pricedCount ? <>Com base no último preço de {estimate.pricedCount} {estimate.pricedCount === 1 ? 'item' : 'itens'}{estimate.missingCount ? ` · ${estimate.missingCount} sem histórico` : ''}</> : 'Registre uma compra para formar o histórico de preços.'}</p>
+      <button type="button" className={showItemEstimates ? 'estimate-item-toggle active' : 'estimate-item-toggle'} aria-pressed={showItemEstimates} onClick={() => setShowItemEstimates((current) => !current)}>{showItemEstimates ? <EyeOff size={15}/> : <Eye size={15}/>}<span>{showItemEstimates ? 'Ocultar nos itens' : 'Valores nos itens'}</span></button>
+    </section>}
     {list.items.length ? <div className="shopping-list-content">
       {pendingItems.length > 0 && (groupByCategory ? <div className="category-groups">{groups.map((group) => <section className={`category-group category-${categoryKey(group.category)}`} key={group.category}><header><CategoryIcon category={group.category} size={17}/><div><h2>{group.category}</h2><span>{group.items.length} {group.items.length === 1 ? 'item' : 'itens'}</span></div></header><div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{group.items.map(renderItem)}</div></section>)}</div> : <div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{pendingItems.map(renderItem)}</div>)}
       {completedItems.length > 0 && <section className="completed-items-group"><header><div><h2>Concluídos</h2><span>{completedItems.length} {completedItems.length === 1 ? 'item' : 'itens'}</span></div><button className="clear-completed" onClick={clearCompleted}><Trash2 size={15}/> Limpar concluídos</button></header><div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{completedItems.map(renderItem)}</div></section>}
@@ -137,7 +146,7 @@ function ShoppingListPage({ state, mutate, open }) {
   </>
 }
 
-function ShoppingListItem({ item, onToggle, onOpenEdit }) {
+function ShoppingListItem({ item, estimatedPrice, showEstimate, onToggle, onOpenEdit }) {
   const pressTimer = useRef(null)
   const pressStart = useRef(null)
   const longPressed = useRef(false)
@@ -175,7 +184,7 @@ function ShoppingListItem({ item, onToggle, onOpenEdit }) {
   }
   const variantLabel = [item.variety, item.brand].filter(Boolean).join(' · ')
   return <article className={`item-row simple category-${categoryKey(item.category)} ${item.checked ? 'checked' : ''}`} tabIndex="0" aria-label={`${item.name}. ${item.checked ? 'Concluído' : 'Pendente'}. Toque para marcar; segure para editar.`} onClick={clickItem} onKeyDown={keyDown} onContextMenu={openContextMenu} onPointerDown={startPress} onPointerMove={movePress} onPointerUp={finishPress} onPointerCancel={finishPress}>
-    <CategoryIcon category={item.category}/><div className="item-main"><b>{item.name}</b><small className="item-details">{[variantLabel, `${item.quantity} ${item.unit}`].filter(Boolean).join(' · ')}</small>{item.note && <small className="item-note">{item.note}</small>}</div>
+    <CategoryIcon category={item.category}/><div className="item-main"><b>{item.name}</b><small className="item-details">{[variantLabel, `${item.quantity} ${item.unit}`].filter(Boolean).join(' · ')}</small>{item.note && <small className="item-note">{item.note}</small>}{showEstimate && <em className={estimatedPrice == null ? 'no-history' : ''}>{estimatedPrice == null ? 'Sem preço no histórico' : `${money(estimatedPrice)} estimado`}</em>}</div>
   </article>
 }
 
@@ -1047,6 +1056,23 @@ function priceHistoryForListItem(state, product, listItem) {
     .map((item) => ({ purchase, item, varietyKey: normalizeText(item.variety) || '__none__', unitPrice: Number(item.unitPrice) || Number(item.totalPrice) / (Number(item.quantity) || 1) })))
     .filter((entry) => entry.unitPrice > 0)
     .sort((a, b) => new Date(b.purchase.purchasedAt) - new Date(a.purchase.purchasedAt))
+}
+function latestPriceForListItem(state, listItem) {
+  const product = state.products.find((saved) => saved.id === listItem.productId) || state.products.find((saved) => normalizeText(saved.name) === normalizeText(listItem.name))
+  const history = priceHistoryForListItem(state, product, listItem)
+  if (!listItem.variantId && !listItem.variety && !listItem.brand) return history[0]
+  return history.find((entry) => entry.item.variantId === listItem.variantId || variantMatchesItem(listItem, entry.item))
+}
+function estimatedPriceForListItem(state, listItem) {
+  const latestPrice = latestPriceForListItem(state, listItem)
+  return latestPrice ? latestPrice.unitPrice * (Number(listItem.quantity) || 1) : null
+}
+function estimateShoppingList(state, list) {
+  return list.items.reduce((estimate, item) => {
+    const estimatedPrice = estimatedPriceForListItem(state, item)
+    if (estimatedPrice == null) return { ...estimate, missingCount: estimate.missingCount + 1 }
+    return { ...estimate, total: estimate.total + estimatedPrice, pricedCount: estimate.pricedCount + 1 }
+  }, { total: 0, pricedCount: 0, missingCount: 0 })
 }
 function categoryKey(category = 'Outros') { return normalizeText(category).replace(/\s+/g, '-') }
 function itemVariantKey(item) { return `product:${[normalizeText(item.productName), normalizeText(item.variety), normalizeText(item.brand), Number(item.packageSize) || 1, item.packageUnit || 'un'].join('|')}` }

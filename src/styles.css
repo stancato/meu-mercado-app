@@ -248,6 +248,9 @@ button { border:0;background:none;cursor:pointer }.primary,.secondary,.ghost { b
 
 /* Lista de compras: quantidade somente leitura e concluídos separados. */
 .shopping-list-content{display:grid;gap:30px}
+.shopping-estimate{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;align-items:center;gap:10px;margin:0 0 18px;padding:10px 12px;border:1px solid var(--line);border-radius:13px;background:color-mix(in srgb,var(--surface) 88%,var(--green) 12%)}
+.shopping-estimate-icon{width:32px;height:32px;display:grid;place-items:center;border-radius:10px;color:var(--green);background:#42dfa012}
+.shopping-estimate small,.shopping-estimate strong{display:block}.shopping-estimate small{color:var(--muted);font-size:9px}.shopping-estimate strong{margin-top:1px;color:var(--green);font:800 16px Manrope}.shopping-estimate p{justify-self:end;margin:0;color:var(--muted);font-size:10px;text-align:right}.shopping-estimate.empty{background:var(--surface)}.shopping-estimate.empty strong{color:var(--text);font-size:13px}.estimate-item-toggle{display:inline-flex;align-items:center;gap:5px;padding:7px 9px;border:1px solid var(--line);border-radius:9px;color:var(--muted);font-size:10px;font-weight:800;white-space:nowrap}.estimate-item-toggle:hover,.estimate-item-toggle.active{color:var(--green);border-color:#42dfa066;background:#42dfa00d}
 .item-quantity{flex:none;padding:7px 10px;border:1px solid color-mix(in srgb,var(--cat) 38%,var(--line));border-radius:10px;background:var(--cat-soft);color:var(--muted);font-size:11px;font-weight:800;white-space:nowrap}
 .grid-view .item-row>.item-quantity{grid-column:1 / 3;grid-row:3;justify-self:start}
 .completed-items-group{margin-top:8px;padding-top:22px;border-top:1px solid var(--line)}
@@ -257,6 +260,7 @@ button { border:0;background:none;cursor:pointer }.primary,.secondary,.ghost { b
 .completed-items-group .item-row{filter:saturate(.7)}
 
 @media(max-width:650px){
+  .shopping-estimate{grid-template-columns:auto minmax(0,1fr) auto;padding:9px 10px}.shopping-estimate p{display:none}.estimate-item-toggle span{display:none}.estimate-item-toggle{width:32px;height:32px;padding:0;justify-content:center}
   .item-row.simple:not(.grid-view *){grid-template-columns:38px minmax(0,1fr) auto;grid-template-rows:auto}
   .item-row.simple:not(.grid-view *)>.category-icon,.item-row.simple:not(.grid-view *)>.purchased-icon{grid-column:1;grid-row:1}
   .item-row.simple:not(.grid-view *)>.item-main{grid-column:2;grid-row:1}
