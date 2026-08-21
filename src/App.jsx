@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Apple, Archive, ArrowLeftRight, BarChart3, Bath, Beef, CalendarClock, Check, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, Eye, EyeOff, GitMerge, LayoutGrid, List, ListChecks, LogIn, LogOut, Milk, Package, PackageCheck, PackagePlus, PackageSearch, Pencil, Plus, ReceiptText, Search, Settings, Share2, ShoppingBasket, SprayCan, Store, Tags, Trash2, TrendingUp, X } from 'lucide-react'
+import { AlertTriangle, Apple, Archive, ArrowLeftRight, BarChart3, Bath, Beef, CalendarClock, Check, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, Eye, EyeOff, GitMerge, LayoutGrid, List, ListChecks, LogIn, LogOut, Milk, Moon, Package, PackageCheck, PackagePlus, PackageSearch, Pencil, Plus, ReceiptText, Search, Settings, Share2, ShoppingBasket, SprayCan, Store, Sun, Tags, Trash2, TrendingUp, X } from 'lucide-react'
 import { signOut } from 'firebase/auth'
 import { auth, firebaseReady, loginWithGoogle } from './firebase'
 import { CATEGORIES, RECEIPT_PROMPT, UNITS, dateTimeLocal, defaultUnitForProduct, money, normalizeImport, normalizeText, normalizedPrice, nowIso, onlyDigits, parseJsonInput, shortDate, uid } from './data'
@@ -34,6 +34,21 @@ export default function App({ user }) {
   const [modal, setModal] = useState(null)
   const [toast, setToast] = useState('')
   const pendingListCount = state.lists[0]?.items.filter((item) => !item.checked).length || 0
+  const themePreference = state.settings?.theme || 'system'
+
+  useEffect(() => {
+    const systemTheme = window.matchMedia('(prefers-color-scheme: dark)')
+    const applyTheme = () => {
+      const theme = themePreference === 'light' || themePreference === 'dark'
+        ? themePreference
+        : systemTheme.matches ? 'dark' : 'light'
+      document.documentElement.dataset.theme = theme
+      document.documentElement.style.colorScheme = theme
+    }
+    applyTheme()
+    if (themePreference === 'system') systemTheme.addEventListener('change', applyTheme)
+    return () => systemTheme.removeEventListener('change', applyTheme)
+  }, [themePreference])
 
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(''), 2800); return () => clearTimeout(t) } }, [toast])
 
@@ -57,7 +72,7 @@ export default function App({ user }) {
     <header className="topbar">
       <div className="topbar-inner">
         <div className="brand"><span className="brand-mark"><ShoppingBasket size={22} /></span><div><strong>Meu Mercado</strong><small>compre melhor, compare sempre</small></div></div>
-        <span className={`sync-pill ${syncStatus}`} title="Situação da sincronização">{syncStatus === 'synced' ? <Cloud size={14}/> : <CloudOff size={14}/>}<span>{syncStatus === 'synced' ? 'Sincronizado' : firebaseReady ? 'Local' : 'Modo local'}</span></span>
+        <span className={`sync-pill ${syncStatus} ${user ? 'with-account' : ''}`} title={user ? `${user.displayName || user.email} · ${syncStatus === 'synced' ? 'Sincronizado' : 'Sincronizando'}` : 'Situação da sincronização'}>{user ? <UserAvatar user={user}/> : syncStatus === 'synced' ? <Cloud size={14}/> : <CloudOff size={14}/>}<span>{user ? user.displayName?.split(' ')[0] || 'Conta Google' : syncStatus === 'synced' ? 'Sincronizado' : firebaseReady ? 'Local' : 'Modo local'}</span></span>
       </div>
     </header>
 
@@ -66,7 +81,7 @@ export default function App({ user }) {
       {tab === 'purchases' && <PurchasesPage state={state} open={setModal} />}
       {tab === 'prices' && <AnalyticsPage state={state} />}
       {tab === 'products' && <ProductsPage state={state} mutate={mutate} open={setModal} />}
-      {tab === 'settings' && <SettingsPage state={state} user={user} open={setModal} toast={setToast} />}
+      {tab === 'settings' && <SettingsPage state={state} mutate={mutate} user={user} open={setModal} toast={setToast} />}
     </main>
 
     <nav className="bottom-nav">{NAV.map(([id, label, Icon]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}><span className="nav-icon"><Icon size={21}/>{id === 'lists' && pendingListCount > 0 && <span className="nav-badge" aria-label={`${pendingListCount} itens para comprar`}>{pendingListCount > 99 ? '99+' : pendingListCount}</span>}</span><span>{label}</span></button>)}</nav>
@@ -312,7 +327,24 @@ function ProductsPage({ state, mutate, open }) {
   </>
 }
 
-function SettingsPage({ user, open, toast }) { return <><PageHeader title="Ajustes" text="Conta, importação e estado da sincronização."/><div className="settings-list"><section className="settings-card"><span className="card-icon">{user ? <Cloud/> : <LogIn/>}</span><div className="grow"><b>{user ? user.displayName : 'Conta Google'}</b><small>{user ? user.email : firebaseReady ? 'Entre para sincronizar entre dispositivos' : 'Firebase ainda não configurado; seus dados estão seguros neste dispositivo'}</small></div>{user ? <button className="secondary" onClick={() => signOut(auth)}><LogOut size={16}/> Sair</button> : <button className="primary" disabled={!firebaseReady} onClick={() => loginWithGoogle().catch((e) => toast(e.message))}>Entrar</button>}</section><button className="settings-card clickable" onClick={() => open({ type: 'prompt' })}><span className="card-icon"><ClipboardCopy/></span><div className="grow"><b>Prompt para leitura da nota</b><small>Copie o formato esperado e use na IA de sua preferência</small></div><ChevronRight/></button><section className="settings-card"><span className="card-icon"><CloudOff/></span><div><b>PWA e modo offline</b><small>A lista permanece disponível sem conexão. A sincronização ocorre ao voltar.</small></div></section></div></> }
+function UserAvatar({ user }) {
+  if (user?.photoURL) return <img className="user-avatar" src={user.photoURL} alt="" referrerPolicy="no-referrer"/>
+  const initials = (user?.displayName || user?.email || 'G').split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase()
+  return <span className="user-avatar avatar-fallback" aria-hidden="true">{initials}</span>
+}
+
+function SettingsPage({ state, mutate, user, open, toast }) {
+  const savedTheme = state.settings?.theme
+  const activeTheme = savedTheme === 'light' || savedTheme === 'dark'
+    ? savedTheme
+    : window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+  const chooseTheme = (theme) => mutate((current) => ({ ...current, settings: { ...current.settings, theme } }))
+  return <><PageHeader title="Ajustes" text="Conta, aparência e estado da sincronização."/><div className="settings-list">
+    <section className="settings-card"><span className="card-icon account-icon">{user ? <UserAvatar user={user}/> : <LogIn/>}</span><div className="grow"><b>{user ? user.displayName : 'Conta Google'}</b><small>{user ? user.email : firebaseReady ? 'Entre para sincronizar entre dispositivos' : 'Firebase ainda não configurado; seus dados estão seguros neste dispositivo'}</small></div>{user ? <button className="secondary" onClick={() => signOut(auth)}><LogOut size={16}/> Sair</button> : <button className="primary" disabled={!firebaseReady} onClick={() => loginWithGoogle().catch((e) => toast(e.message))}>Entrar</button>}</section>
+    <section className="settings-card theme-setting"><span className="card-icon"><Sun/></span><div className="grow"><b>Aparência</b><small>Escolha o tema que fica melhor para você</small></div><div className="theme-options" aria-label="Tema do aplicativo"><button className={activeTheme === 'light' ? 'active' : ''} aria-pressed={activeTheme === 'light'} onClick={() => chooseTheme('light')}><Sun size={16}/> Claro</button><button className={activeTheme === 'dark' ? 'active' : ''} aria-pressed={activeTheme === 'dark'} onClick={() => chooseTheme('dark')}><Moon size={16}/> Escuro</button></div></section>
+    <button className="settings-card clickable" onClick={() => open({ type: 'prompt' })}><span className="card-icon"><ClipboardCopy/></span><div className="grow"><b>Prompt para leitura da nota</b><small>Copie o formato esperado e use na IA de sua preferência</small></div><ChevronRight/></button><section className="settings-card"><span className="card-icon"><CloudOff/></span><div><b>PWA e modo offline</b><small>A lista permanece disponível sem conexão. A sincronização ocorre ao voltar.</small></div></section>
+  </div></>
+}
 
 function InlineProductSearch({ products, list, state, onAdd }) {
   const [query, setQuery] = useState('')
