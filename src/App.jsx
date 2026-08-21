@@ -100,6 +100,7 @@ export default function App({ user }) {
       mutate((current) => updateCatalogProduct(current, modal.product, product))
       setModal(null); setToast('Produto atualizado no catálogo.')
     }} />}
+    {modal?.type === 'product-detail' && <ProductDetailPanel product={modal.product} state={state} onClose={() => setModal(null)} onEdit={() => setModal({ type: 'product', product: modal.product })} />}
     {modal?.type === 'merge-products' && <ProductMergeModal initialLeft={modal.products[0]} initialRight={modal.products[1]} onClose={() => setModal(null)} onMerge={(plan) => { mutate((current) => mergeCatalogProducts(current, plan)); setModal(null); setToast('Produtos normalizados e histórico atualizado.') }} />}
     {modal?.type === 'import' && <ImportModal toast={setToast} onClose={() => setModal(null)} onReview={(draft) => setModal({ type: 'review', draft: prepareDraftProductMatches({ ...draft, source: 'json' }, state.products, state.productMappings) })} />}
     {modal?.type === 'manual' && <ManualPurchaseModal markets={state.markets} onClose={() => setModal(null)} onReview={(draft) => setModal({ type: 'review', draft: prepareDraftProductMatches({ ...draft, source: 'manual' }, state.products, state.productMappings) })} />}
@@ -303,12 +304,13 @@ function ProductsPage({ state, mutate, open }) {
   const renderProduct = (product) => {
     const frequency = periodicityInfo(state, product)
     const variants = normalizeProductVariants(product.variants)
-    return <article className={`product-card category-${categoryKey(product.category)} ${selectedSet.has(product.id) ? 'selected' : ''}`} key={product.id}>
+    const openDetails = () => open({ type: 'product-detail', product })
+    return <article className={`product-card category-${categoryKey(product.category)} ${selectedSet.has(product.id) ? 'selected' : ''}`} key={product.id} role="button" tabIndex="0" aria-label={`Visualizar ${product.name}`} onClick={(event) => { if (!event.target.closest('button')) openDetails() }} onKeyDown={(event) => { if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return; event.preventDefault(); openDetails() }}>
       <div className="product-card-header">
         <button className="product-select" aria-label={`Selecionar ${product.name}`} aria-pressed={selectedSet.has(product.id)} onClick={() => toggle(product.id)}>{selectedSet.has(product.id) && <Check size={15}/>}</button>
         <CategoryIcon category={product.category} size={22}/>
         <div className="product-title"><b>{product.name}</b><small>{product.category} · {product.defaultUnit || defaultUnitForProduct(product.name, product.category)}</small></div>
-        <div className="product-card-actions"><button className="icon-button edit-product" aria-label={`Editar ${product.name}`} title="Editar produto" onClick={() => open({ type: 'product', product })}><Pencil size={17}/></button><button className="icon-button archive-product" aria-label={`Arquivar ${product.name}`} title="Arquivar produto" onClick={() => archiveProduct(product.id)}><Archive size={17}/></button></div>
+        <div className="product-card-actions"><button className="icon-button archive-product" aria-label={`Arquivar ${product.name}`} title="Arquivar produto" onClick={() => archiveProduct(product.id)}><Archive size={17}/></button><span className="product-open-indicator" aria-hidden="true"><ChevronRight size={18}/></span></div>
       </div>
       {variants.length > 0 && <div className="product-card-body"><div className="product-variant-badges" aria-label="Variações do produto">{variants.map((variant) => <span key={variant.id}>{[variant.variety, variant.brand, `${variant.packageSize} ${variant.packageUnit}`].filter(Boolean).join(' · ') || 'Variação padrão'}</span>)}</div></div>}
       <div className="product-card-footer"><span className="product-card-label"><CalendarClock size={14}/> Reposição</span><strong className="product-periodicity" title={product.recurrenceDays == null ? `Automática · ${frequency.label}` : frequency.label}>{compactPeriodicity(product, frequency)}</strong></div>
@@ -446,6 +448,39 @@ function PriceHistoryPanel({ productName, entries, filter, selectedVarietyLabel,
     <Field label="Filtrar por variedade"><select value={filter} onChange={(event) => onFilterChange(event.target.value)}><option value="all">Todas as variedades</option>{varieties.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field>
     <div className="price-history-summary"><div><small>Preço médio</small><strong>{filteredEntries.length ? money(average) : '—'}</strong><span>por item comprado</span></div><div><small>Registros</small><strong>{filteredEntries.length}</strong><span>{filteredEntries.length === 1 ? 'compra' : 'compras'}</span></div></div>
     {filteredEntries.length ? <div className="item-price-history-list">{filteredEntries.map((entry) => <article key={`${entry.purchase.id}-${entry.item.id}`}><span className="price-history-date"><b>{shortDate(entry.purchase.purchasedAt)}</b><small>{entry.purchase.marketName}</small></span><span className="price-history-variant"><b>{entry.item.variety || 'Sem variedade'}</b><small>{[entry.item.brand, `${Number(entry.item.packageSize) || 1} ${entry.item.packageUnit || 'un'}`].filter(Boolean).join(' · ')}</small></span><span className="price-history-value"><strong>{money(entry.unitPrice)}</strong>{Number(entry.item.quantity) !== 1 && <small>{entry.item.quantity} itens · total {money(entry.item.totalPrice)}</small>}</span></article>)}</div> : <Empty icon={CircleDollarSign} title="Nenhum preço nesta variedade" text="Escolha outra variedade ou registre uma nova compra."/>}
+  </Modal>
+}
+
+function ProductDetailPanel({ product, state, onClose, onEdit }) {
+  const variants = normalizeProductVariants(product.variants)
+  const history = purchaseHistoryFor(state, product.name)
+  const frequency = periodicityInfo(state, product)
+  const latest = history[0]
+  const defaultUnit = product.defaultUnit || defaultUnitForProduct(product.name, product.category)
+  return <Modal title="Visualizar produto" subtitle="Informações salvas no catálogo e histórico de compras." onClose={onClose} wide>
+    <div className={`product-detail-hero category-${categoryKey(product.category)}`}>
+      <CategoryIcon category={product.category} size={28}/>
+      <div><h3>{product.name}</h3><p>{product.category || 'Outros'} · unidade padrão: {defaultUnit}</p></div>
+      <button className="primary product-detail-edit" onClick={onEdit}><Pencil size={17}/> Editar produto</button>
+    </div>
+
+    <div className="product-detail-summary">
+      <div><span><CalendarClock size={17}/></span><small>Reposição</small><strong>{product.recurrenceDays == null ? `Automática · ${frequency.label}` : frequency.label}</strong></div>
+      <div><span><PackagePlus size={17}/></span><small>Variações</small><strong>{variants.length}</strong></div>
+      <div><span><ReceiptText size={17}/></span><small>Compras</small><strong>{history.length}</strong></div>
+    </div>
+
+    <section className="product-detail-section">
+      <header><div><h3>Variações de compra</h3><p>Sabor ou tipo, marca e tamanho da embalagem.</p></div></header>
+      {variants.length ? <div className="product-detail-variants">{variants.map((variant) => <article key={variant.id}><span className="product-detail-variant-icon"><Package size={18}/></span><div><b>{variant.variety || 'Variação padrão'}</b><small>{variant.brand || 'Sem marca'}</small></div><strong>{variant.packageSize} {variant.packageUnit}</strong></article>)}</div> : <p className="product-detail-empty">Nenhuma variação cadastrada.</p>}
+    </section>
+
+    <section className="product-detail-section">
+      <header><div><h3>Histórico recente</h3><p>{latest ? `Última compra em ${shortDate(latest.purchase.purchasedAt)}` : 'Ainda não há compras registradas.'}</p></div></header>
+      {history.length ? <div className="product-detail-history">{history.slice(0, 5).map(({ purchase, item }) => <article key={`${purchase.id}-${item.id}`}><div><b>{purchase.marketName}</b><small>{shortDate(purchase.purchasedAt)} · {[item.variety, item.brand].filter(Boolean).join(' · ') || 'Sem variação'}</small></div><strong>{money(item.totalPrice)}</strong></article>)}</div> : <p className="product-detail-empty">Os preços e mercados aparecerão aqui depois da primeira compra.</p>}
+    </section>
+
+    <div className="modal-actions"><button className="secondary" onClick={onClose}>Fechar</button></div>
   </Modal>
 }
 
