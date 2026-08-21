@@ -45,6 +45,7 @@ export const initialState = {
   products: STARTER_PRODUCTS,
   productMappings: [],
   productNormalizations: [],
+  deletedListItems: [],
   markets: [],
   settings: { theme: 'system' },
   updatedAt: null,

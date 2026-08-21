@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app'
 import { browserLocalPersistence, getAuth, GoogleAuthProvider, setPersistence, signInWithPopup, signInWithRedirect } from 'firebase/auth'
-import { collection, deleteDoc, doc, enableIndexedDbPersistence, getDoc, getDocs, getFirestore, serverTimestamp, writeBatch } from 'firebase/firestore'
+import { collection, deleteDoc, doc, enableIndexedDbPersistence, getDoc, getDocs, getFirestore, runTransaction, serverTimestamp, writeBatch } from 'firebase/firestore'
+import { mergeSyncedStates } from './sync'
 
 const config = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -60,16 +61,18 @@ export async function loadCloudState(userId) {
   const hasStructuredData = listSnapshot.exists() || purchases.length || products.length || markets.length
   if (hasStructuredData) {
     const preferences = preferencesSnapshot.exists() ? preferencesSnapshot.data() : {}
+    const list = listSnapshot.exists() ? listSnapshot.data() : { id: 'shopping-list', name: 'Lista de mercado', items: [] }
     return {
       hasData: true,
       state: {
-        lists: [listSnapshot.exists() ? listSnapshot.data() : { id: 'shopping-list', name: 'Lista de mercado', items: [] }],
+        lists: [list],
         purchases: purchases.sort((a, b) => new Date(b.purchasedAt || 0) - new Date(a.purchasedAt || 0)),
         products,
         markets,
         settings: preferences.settings || { theme: 'system' },
         productMappings: Array.isArray(preferences.productMappings) ? preferences.productMappings : [],
         productNormalizations: Array.isArray(preferences.productNormalizations) ? preferences.productNormalizations : [],
+        deletedListItems: Array.isArray(list.deletedListItems) ? list.deletedListItems : Array.isArray(preferences.deletedListItems) ? preferences.deletedListItems : [],
         updatedAt: preferences.updatedAt || null,
       },
     }
@@ -92,20 +95,42 @@ async function syncCollection(batch, userId, name, entries) {
 }
 
 export async function saveCloudState(userId, state, userProfile) {
+  const listRef = doc(db, 'users', userId, 'shoppingList', 'current')
+  const savedState = await runTransaction(db, async (transaction) => {
+    const snapshot = await transaction.get(listRef)
+    if (!snapshot.exists()) {
+      const firstList = state.lists?.[0] || { id: 'shopping-list', name: 'Lista de mercado', items: [] }
+      const updatedAt = state.updatedAt || new Date().toISOString()
+      transaction.set(listRef, { ...firstList, deletedListItems: state.deletedListItems || [], updatedAt })
+      return { ...state, updatedAt }
+    }
+
+    const remoteList = snapshot.data()
+    const remoteState = {
+      ...state,
+      lists: [remoteList],
+      deletedListItems: remoteList.deletedListItems || [],
+      updatedAt: remoteList.updatedAt || null,
+    }
+    const merged = mergeSyncedStates({}, state, remoteState)
+    const mergedList = merged.lists?.[0] || { id: 'shopping-list', name: 'Lista de mercado', items: [] }
+    transaction.set(listRef, { ...mergedList, deletedListItems: merged.deletedListItems || [], updatedAt: merged.updatedAt || new Date().toISOString() })
+    return merged
+  })
+
   const batch = writeBatch(db)
   await Promise.all([
-    syncCollection(batch, userId, 'purchases', state.purchases || []),
-    syncCollection(batch, userId, 'products', state.products || []),
-    syncCollection(batch, userId, 'markets', state.markets || []),
+    syncCollection(batch, userId, 'purchases', savedState.purchases || []),
+    syncCollection(batch, userId, 'products', savedState.products || []),
+    syncCollection(batch, userId, 'markets', savedState.markets || []),
   ])
 
-  const list = state.lists?.[0] || { id: 'shopping-list', name: 'Lista de mercado', items: [] }
-  batch.set(doc(db, 'users', userId, 'shoppingList', 'current'), list)
   batch.set(doc(db, 'users', userId, 'app', 'preferences'), {
-    settings: state.settings || { theme: 'system' },
-    productMappings: state.productMappings || [],
-    productNormalizations: state.productNormalizations || [],
-    updatedAt: state.updatedAt || new Date().toISOString(),
+    settings: savedState.settings || { theme: 'system' },
+    productMappings: savedState.productMappings || [],
+    productNormalizations: savedState.productNormalizations || [],
+    deletedListItems: savedState.deletedListItems || [],
+    updatedAt: savedState.updatedAt || new Date().toISOString(),
     savedAt: serverTimestamp(),
   })
   if (userProfile) {
@@ -117,6 +142,7 @@ export async function saveCloudState(userId, state, userProfile) {
     }, { merge: true })
   }
   await batch.commit()
+  return savedState
 }
 
 export async function removeLegacyCloudState(userId) {

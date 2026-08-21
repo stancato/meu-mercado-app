@@ -71,7 +71,7 @@ export default function App({ user }) {
 
     <nav className="bottom-nav">{NAV.map(([id, label, Icon]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}><span className="nav-icon"><Icon size={21}/>{id === 'lists' && pendingListCount > 0 && <span className="nav-badge" aria-label={`${pendingListCount} itens para comprar`}>{pendingListCount > 99 ? '99+' : pendingListCount}</span>}</span><span>{label}</span></button>)}</nav>
 
-    {modal?.type === 'item' && <ItemPanel item={modal.item} products={state.products} onClose={() => setModal(null)} onEditProduct={(product) => setModal({ type: 'product', product })} onDelete={() => {
+    {modal?.type === 'item' && <ItemPanel item={modal.item} state={state} onClose={() => setModal(null)} onEditProduct={(product) => setModal({ type: 'product', product })} onDelete={() => {
       mutate((s) => ({ ...s, lists: s.lists.map((list) => ({ ...list, items: list.items.filter((item) => item.id !== modal.item.id) })) }))
       setModal(null); setToast('Item removido da lista.')
     }} onSave={(item) => {
@@ -353,12 +353,21 @@ function InlineProductSearch({ products, list, state, onAdd }) {
 
 function SuggestionButton({ product, alreadyAdded = false, onAdd, meta, variant = false }) { const selected = product.selectedVariant; return <button className={`category-${categoryKey(product.category)} ${variant ? 'variant-result' : ''}`} role="option" aria-selected={alreadyAdded} disabled={alreadyAdded} onClick={() => onAdd(product)}><CategoryIcon category={product.category}/><span className="grow"><b>{variant ? [product.name, selected?.variety].filter(Boolean).join(' · ') : product.name}</b><small>{meta || (variant ? [selected?.brand, `${selected?.packageSize} ${selected?.packageUnit}`].filter(Boolean).join(' · ') : `${product.category} · ${product.defaultUnit || defaultUnitForProduct(product.name, product.category)}`)}</small></span>{alreadyAdded ? <span className="added-label"><Check size={15}/> Na lista</span> : <Plus size={19}/>}</button> }
 
-function ItemPanel({ item: initial, products, onClose, onSave, onDelete, onEditProduct }) {
+function ItemPanel({ item: initial, state, onClose, onSave, onDelete, onEditProduct }) {
   const [item, setItem] = useState(initial)
-  const product = products.find((saved) => saved.id === initial.productId) || products.find((saved) => normalizeText(saved.name) === normalizeText(initial.name))
+  const [showPriceHistory, setShowPriceHistory] = useState(false)
+  const [historyFilter, setHistoryFilter] = useState('all')
+  const product = state.products.find((saved) => saved.id === initial.productId) || state.products.find((saved) => normalizeText(saved.name) === normalizeText(initial.name))
   const variants = normalizeProductVariants(product?.variants)
   const selectedVariant = variants.find((variant) => variant.id === item.variantId) || variants.find((variant) => variantMatchesItem(variant, item))
   const selectedVariantId = selectedVariant?.id || ''
+  const priceHistory = priceHistoryForListItem(state, product, initial)
+  const selectedVarietyKey = normalizeText(item.variety)
+  const latestPrice = selectedVarietyKey ? priceHistory.find((entry) => entry.varietyKey === selectedVarietyKey) : priceHistory[0]
+  const openPriceHistory = () => {
+    setHistoryFilter(selectedVarietyKey || 'all')
+    setShowPriceHistory(true)
+  }
   const selectVariant = (variantId) => {
     const variant = variants.find((saved) => saved.id === variantId)
     setItem((current) => variant ? { ...current, variantId: variant.id, variety: variant.variety || '', brand: variant.brand || '', packageSize: variant.packageSize, packageUnit: variant.packageUnit } : { ...current, variantId: '', variety: '', brand: '', packageSize: '', packageUnit: '' })
@@ -367,15 +376,35 @@ function ItemPanel({ item: initial, products, onClose, onSave, onDelete, onEditP
     event.preventDefault()
     onSave({ ...item, quantity: Math.max(0.1, Number(item.quantity) || 1), note: (item.note || '').trim() })
   }
+  if (showPriceHistory) return <PriceHistoryPanel productName={item.name} entries={priceHistory} filter={historyFilter} selectedVarietyLabel={item.variety} onFilterChange={setHistoryFilter} onBack={() => setShowPriceHistory(false)} onClose={onClose}/>
   return <Modal title="Editar item da lista" subtitle="Quantidade e nota valem somente para esta lista." onClose={onClose}>
     <form onSubmit={submit}>
       <div className={`list-item-edit-heading category-${categoryKey(item.category)}`}><CategoryIcon category={item.category}/><div><b>{item.name}</b><small>{item.category} · {item.unit}</small></div></div>
       {product && <button type="button" className="secondary edit-catalog-product" onClick={() => onEditProduct(product)}><Pencil size={16}/> Editar produto no catálogo</button>}
       <Field label="Quantidade"><div className="quantity-field"><input autoFocus type="number" min="0.1" step="0.1" value={item.quantity} onChange={(event) => setItem({ ...item, quantity: event.target.value })}/><span>{item.unit}</span></div></Field>
       {variants.length > 0 && <Field label="Variação (opcional)"><select value={selectedVariantId} onChange={(event) => selectVariant(event.target.value)}><option value="">Nenhuma variação</option>{variants.map((variant) => <option key={variant.id} value={variant.id}>{[variant.variety || 'Variação padrão', variant.brand || 'Sem marca', `${variant.packageSize} ${variant.packageUnit}`].join(' · ')}</option>)}</select><small>Vale somente para este item da lista.</small></Field>}
+      <div className={`item-latest-price ${latestPrice ? '' : 'empty'}`}>
+        <span className="price-history-icon"><CircleDollarSign size={21}/></span>
+        <div className="grow"><small>{selectedVarietyKey ? `Último preço · ${item.variety}` : 'Último preço · última variedade comprada'}</small>{latestPrice ? <><strong>{money(latestPrice.unitPrice)}</strong><em>{[latestPrice.item.variety, shortDate(latestPrice.purchase.purchasedAt), latestPrice.purchase.marketName].filter(Boolean).join(' · ')}</em></> : <strong>Nenhum preço registrado</strong>}</div>
+        <button type="button" className="price-history-button" onClick={openPriceHistory} aria-label="Abrir histórico de preços" title="Histórico de preços"><CircleDollarSign size={19}/><span>Preços</span></button>
+      </div>
       <Field label="Nota para esta lista (opcional)"><textarea rows="3" value={item.note || ''} onChange={(event) => setItem({ ...item, note: event.target.value })} placeholder="Ex.: comprar para o almoço de domingo"/><small>A nota será apagada quando o item sair da lista.</small></Field>
       <div className="modal-actions item-modal-actions"><button type="button" className="secondary danger item-delete-button" onClick={onDelete}><Trash2 size={17}/> Excluir da lista</button><span/><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary"><Check size={17}/> Salvar</button></div>
     </form>
+  </Modal>
+}
+
+function PriceHistoryPanel({ productName, entries, filter, selectedVarietyLabel, onFilterChange, onBack, onClose }) {
+  const varietyMap = new Map(entries.map((entry) => [entry.varietyKey, entry.item.variety || 'Sem variedade']))
+  if (filter !== 'all' && !varietyMap.has(filter)) varietyMap.set(filter, selectedVarietyLabel || 'Sem variedade')
+  const varieties = [...varietyMap.entries()]
+  const filteredEntries = filter === 'all' ? entries : entries.filter((entry) => entry.varietyKey === filter)
+  const average = filteredEntries.length ? filteredEntries.reduce((sum, entry) => sum + entry.unitPrice, 0) / filteredEntries.length : 0
+  return <Modal title={`Preços de ${productName}`} subtitle="Média e compras registradas para este produto." onClose={onClose}>
+    <button type="button" className="ghost price-history-back" onClick={onBack}><ChevronRight size={17}/> Voltar para a edição</button>
+    <Field label="Filtrar por variedade"><select value={filter} onChange={(event) => onFilterChange(event.target.value)}><option value="all">Todas as variedades</option>{varieties.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field>
+    <div className="price-history-summary"><div><small>Preço médio</small><strong>{filteredEntries.length ? money(average) : '—'}</strong><span>por item comprado</span></div><div><small>Registros</small><strong>{filteredEntries.length}</strong><span>{filteredEntries.length === 1 ? 'compra' : 'compras'}</span></div></div>
+    {filteredEntries.length ? <div className="item-price-history-list">{filteredEntries.map((entry) => <article key={`${entry.purchase.id}-${entry.item.id}`}><span className="price-history-date"><b>{shortDate(entry.purchase.purchasedAt)}</b><small>{entry.purchase.marketName}</small></span><span className="price-history-variant"><b>{entry.item.variety || 'Sem variedade'}</b><small>{[entry.item.brand, `${Number(entry.item.packageSize) || 1} ${entry.item.packageUnit || 'un'}`].filter(Boolean).join(' · ')}</small></span><span className="price-history-value"><strong>{money(entry.unitPrice)}</strong>{Number(entry.item.quantity) !== 1 && <small>{entry.item.quantity} itens · total {money(entry.item.totalPrice)}</small>}</span></article>)}</div> : <Empty icon={CircleDollarSign} title="Nenhum preço nesta variedade" text="Escolha outra variedade ou registre uma nova compra."/>}
   </Modal>
 }
 
@@ -1010,6 +1039,15 @@ function listItemSelectionKey(item) { const productKey = item.productId || norma
 function productToListItem(product) { const variant = product.selectedVariant; return { id: uid(), productId: product.id, name: product.name, quantity: 1, unit: product.defaultUnit || defaultUnitForProduct(product.name, product.category), category: product.category || 'Outros', note: '', checked: false, ...(variant ? { variantId: variant.id, variety: variant.variety || '', brand: variant.brand || '', packageSize: variant.packageSize, packageUnit: variant.packageUnit } : {}) } }
 function purchaseHistoryFor(state, name) { return state.purchases.flatMap((purchase) => purchase.items.filter((item) => normalizeText(item.productName) === normalizeText(name)).map((item) => ({ purchase, item }))).sort((a, b) => new Date(b.purchase.purchasedAt) - new Date(a.purchase.purchasedAt)) }
 function purchaseHistoryForVariant(state, product, variant) { return state.purchases.flatMap((purchase) => purchase.items.filter((item) => item.variantId ? item.variantId === variant.id : normalizeText(item.productName) === normalizeText(product.name) && variantMatchesItem(variant, item)).map((item) => ({ purchase, item }))).sort((a, b) => new Date(b.purchase.purchasedAt) - new Date(a.purchase.purchasedAt)) }
+function priceHistoryForListItem(state, product, listItem) {
+  const productId = product?.id || listItem.productId
+  const productName = product?.name || listItem.name
+  return state.purchases.flatMap((purchase) => purchase.items
+    .filter((item) => (productId && item.productId === productId) || normalizeText(item.productName) === normalizeText(productName))
+    .map((item) => ({ purchase, item, varietyKey: normalizeText(item.variety) || '__none__', unitPrice: Number(item.unitPrice) || Number(item.totalPrice) / (Number(item.quantity) || 1) })))
+    .filter((entry) => entry.unitPrice > 0)
+    .sort((a, b) => new Date(b.purchase.purchasedAt) - new Date(a.purchase.purchasedAt))
+}
 function categoryKey(category = 'Outros') { return normalizeText(category).replace(/\s+/g, '-') }
 function itemVariantKey(item) { return `product:${[normalizeText(item.productName), normalizeText(item.variety), normalizeText(item.brand), Number(item.packageSize) || 1, item.packageUnit || 'un'].join('|')}` }
 function itemVariantLabel(item) { return [item.variety, item.brand, `${Number(item.packageSize) || 1} ${item.packageUnit || 'un'}`].filter(Boolean).join(' · ') }

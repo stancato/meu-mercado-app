@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { initialState, normalizeText, nowIso, STARTER_PRODUCTS } from './data'
 import { firebaseReady, loadCloudState, removeLegacyCloudState, saveCloudState } from './firebase'
+import { mergeSyncedStates, stampListChanges } from './sync'
 
 const STORAGE_KEY = 'meu-mercado-state-v1'
 const StoreContext = createContext(null)
@@ -27,7 +28,8 @@ const normalizeState = (value = {}) => {
     products,
     productMappings: Array.isArray(merged.productMappings) ? merged.productMappings : [],
     productNormalizations: Array.isArray(merged.productNormalizations) ? merged.productNormalizations : [],
-    lists: [{ id: 'shopping-list', name: 'Lista de mercado', status: 'active', items: uniqueItems, createdAt: oldLists[0]?.createdAt || new Date().toISOString() }],
+    deletedListItems: Array.isArray(merged.deletedListItems) ? merged.deletedListItems : [],
+    lists: [{ ...oldLists[0], id: 'shopping-list', name: 'Lista de mercado', status: 'active', items: uniqueItems, createdAt: oldLists[0]?.createdAt || new Date().toISOString() }],
     activePurchase: undefined,
   }
 }
@@ -44,6 +46,8 @@ export function StoreProvider({ user, children }) {
   const hydratedUser = useRef(null)
   const stateRef = useRef(state)
   const hydrationRun = useRef(0)
+  const lastSyncedState = useRef(null)
+  const saveQueue = useRef(Promise.resolve())
 
   useEffect(() => {
     stateRef.current = state
@@ -60,9 +64,10 @@ export function StoreProvider({ user, children }) {
 
     const userStorageKey = `${STORAGE_KEY}-${user.uid}`
     const cached = localStorage.getItem(userStorageKey)
+    let cachedState = null
     if (cached) {
       try {
-        const cachedState = normalizeState(JSON.parse(cached))
+        cachedState = normalizeState(JSON.parse(cached))
         stateRef.current = cachedState
         setState(cachedState)
       } catch { /* usa o estado local atual */ }
@@ -73,17 +78,28 @@ export function StoreProvider({ user, children }) {
       if (hydrationRun.current !== run) return
       if (cloud.hasData) {
         const cloudState = normalizeState(cloud.state)
-        setState(cloudState)
-        stateRef.current = cloudState
-        localStorage.setItem(userStorageKey, JSON.stringify(cloudState))
+        const reconciledState = cachedState ? normalizeState(mergeSyncedStates({}, cachedState, cloudState)) : cloudState
+        setState(reconciledState)
+        stateRef.current = reconciledState
+        lastSyncedState.current = cloudState
+        localStorage.setItem(userStorageKey, JSON.stringify(reconciledState))
+        if (cachedState && JSON.stringify(reconciledState) !== JSON.stringify(cloudState)) {
+          const savedState = normalizeState(await saveCloudState(user.uid, reconciledState, user))
+          lastSyncedState.current = savedState
+          stateRef.current = savedState
+          setState(savedState)
+        }
         if (cloud.legacy) {
-          await saveCloudState(user.uid, cloudState, user)
+          await saveCloudState(user.uid, reconciledState, user)
           await removeLegacyCloudState(user.uid)
         }
       } else {
         const localState = stateRef.current
-        await saveCloudState(user.uid, localState, user)
-        localStorage.setItem(userStorageKey, JSON.stringify(localState))
+        const savedState = normalizeState(await saveCloudState(user.uid, localState, user))
+        lastSyncedState.current = savedState
+        stateRef.current = savedState
+        setState(savedState)
+        localStorage.setItem(userStorageKey, JSON.stringify(savedState))
       }
       if (hydrationRun.current !== run) return
       hydratedUser.current = user.uid
@@ -95,8 +111,15 @@ export function StoreProvider({ user, children }) {
     if (!user || !firebaseReady || hydratedUser.current !== user.uid) return
     setSyncStatus('syncing')
     const timeout = setTimeout(() => {
-      saveCloudState(user.uid, state, user).then(() => {
-        localStorage.setItem(`${STORAGE_KEY}-${user.uid}`, JSON.stringify(state))
+      saveQueue.current = saveQueue.current.catch(() => {}).then(async () => {
+        const cloud = await loadCloudState(user.uid)
+        const remoteState = cloud.hasData ? normalizeState(cloud.state) : lastSyncedState.current || state
+        const stateToSave = normalizeState(mergeSyncedStates(lastSyncedState.current || {}, state, remoteState))
+        const savedState = normalizeState(await saveCloudState(user.uid, stateToSave, user))
+        lastSyncedState.current = savedState
+        stateRef.current = savedState
+        localStorage.setItem(`${STORAGE_KEY}-${user.uid}`, JSON.stringify(savedState))
+        if (JSON.stringify(savedState) !== JSON.stringify(state)) setState(savedState)
         setSyncStatus('synced')
       }).catch(() => setSyncStatus('offline'))
     }, 700)
@@ -104,7 +127,10 @@ export function StoreProvider({ user, children }) {
   }, [state, user])
 
   const mutate = useCallback((recipe) => {
-    setState((current) => ({ ...recipe(current), updatedAt: nowIso() }))
+    setState((current) => {
+      const changedAt = nowIso()
+      return { ...stampListChanges(current, recipe(current), changedAt), updatedAt: changedAt }
+    })
   }, [])
 
   const value = useMemo(() => ({ state, setState, mutate, syncStatus }), [state, mutate, syncStatus])
