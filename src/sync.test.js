@@ -39,3 +39,12 @@ test('uma alteração remota vence a cópia local que não mudou', () => {
   const merged = mergeSyncedStates(base, base, remote)
   assert.equal(merged.lists[0].items[0].checked, true)
 })
+
+test('uma alteração local vence o remoto inalterado mesmo com relógio atrasado', () => {
+  const original = { id: 'arroz', name: 'Arroz', checked: false, updatedAt: '2026-08-21T10:00:00.000Z' }
+  const changedWithSlowClock = { ...original, checked: true, updatedAt: '2026-08-21T09:59:00.000Z' }
+  const base = state([original], '2026-08-21T10:00:00.000Z')
+  const local = state([changedWithSlowClock], '2026-08-21T09:59:00.000Z')
+  const merged = mergeSyncedStates(base, local, base)
+  assert.equal(merged.lists[0].items[0].checked, true)
+})

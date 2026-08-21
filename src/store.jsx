@@ -44,6 +44,7 @@ export function StoreProvider({ user, children }) {
   const [state, setState] = useState(readLocal)
   const [syncStatus, setSyncStatus] = useState(firebaseReady ? 'local' : 'not-configured')
   const hydratedUser = useRef(null)
+  const activeUser = useRef(null)
   const stateRef = useRef(state)
   const hydrationRun = useRef(0)
   const lastSyncedState = useRef(null)
@@ -52,17 +53,26 @@ export function StoreProvider({ user, children }) {
   useEffect(() => {
     stateRef.current = state
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
-  }, [state])
+    // A cópia por usuário também precisa ser imediata. Se ela fosse atualizada
+    // apenas depois do debounce/envio, um refresh restauraria a versão anterior.
+    if (user && activeUser.current === user.uid) {
+      localStorage.setItem(`${STORAGE_KEY}-${user.uid}`, JSON.stringify(state))
+    }
+  }, [state, user])
 
   useEffect(() => {
     const run = ++hydrationRun.current
     if (!user || !firebaseReady) {
+      activeUser.current = null
       hydratedUser.current = null
+      lastSyncedState.current = null
       setSyncStatus(firebaseReady ? 'local' : 'not-configured')
       return
     }
 
+    activeUser.current = user.uid
     const userStorageKey = `${STORAGE_KEY}-${user.uid}`
+    const stateAtHydrationStart = stateRef.current
     const cached = localStorage.getItem(userStorageKey)
     let cachedState = null
     if (cached) {
@@ -78,16 +88,28 @@ export function StoreProvider({ user, children }) {
       if (hydrationRun.current !== run) return
       if (cloud.hasData) {
         const cloudState = normalizeState(cloud.state)
-        const reconciledState = cachedState ? normalizeState(mergeSyncedStates({}, cachedState, cloudState)) : cloudState
+        const hydrationBase = cachedState || stateAtHydrationStart
+        const cachedAndCloud = cachedState ? normalizeState(mergeSyncedStates({}, cachedState, cloudState)) : cloudState
+        // Se o usuário editar enquanto a nuvem ainda está carregando, inclui a
+        // edição na reconciliação em vez de substituí-la pela resposta tardia.
+        const reconciledState = stateRef.current === hydrationBase
+          ? cachedAndCloud
+          : normalizeState(mergeSyncedStates(hydrationBase, stateRef.current, cachedAndCloud))
         setState(reconciledState)
         stateRef.current = reconciledState
         lastSyncedState.current = cloudState
         localStorage.setItem(userStorageKey, JSON.stringify(reconciledState))
-        if (cachedState && JSON.stringify(reconciledState) !== JSON.stringify(cloudState)) {
-          const savedState = normalizeState(await saveCloudState(user.uid, reconciledState, user))
+        if (JSON.stringify(reconciledState) !== JSON.stringify(cloudState)) {
+          const savedState = normalizeState(await saveCloudState(user.uid, reconciledState, user, cloudState))
           lastSyncedState.current = savedState
-          stateRef.current = savedState
-          setState(savedState)
+          if (stateRef.current === reconciledState) {
+            stateRef.current = savedState
+            setState(savedState)
+          } else {
+            const latestState = normalizeState(mergeSyncedStates(reconciledState, stateRef.current, savedState))
+            stateRef.current = latestState
+            setState(latestState)
+          }
         }
         if (cloud.legacy) {
           await saveCloudState(user.uid, reconciledState, user)
@@ -115,11 +137,15 @@ export function StoreProvider({ user, children }) {
         const cloud = await loadCloudState(user.uid)
         const remoteState = cloud.hasData ? normalizeState(cloud.state) : lastSyncedState.current || state
         const stateToSave = normalizeState(mergeSyncedStates(lastSyncedState.current || {}, state, remoteState))
-        const savedState = normalizeState(await saveCloudState(user.uid, stateToSave, user))
+        const savedState = normalizeState(await saveCloudState(user.uid, stateToSave, user, remoteState))
         lastSyncedState.current = savedState
-        stateRef.current = savedState
-        localStorage.setItem(`${STORAGE_KEY}-${user.uid}`, JSON.stringify(savedState))
-        if (JSON.stringify(savedState) !== JSON.stringify(state)) setState(savedState)
+        // Não sobrescreve uma nova edição feita enquanto esta gravação
+        // estava em andamento; a próxima passagem da fila cuidará dela.
+        if (stateRef.current === state) {
+          stateRef.current = savedState
+          localStorage.setItem(`${STORAGE_KEY}-${user.uid}`, JSON.stringify(savedState))
+          if (JSON.stringify(savedState) !== JSON.stringify(state)) setState(savedState)
+        }
         setSyncStatus('synced')
       }).catch(() => setSyncStatus('offline'))
     }, 700)

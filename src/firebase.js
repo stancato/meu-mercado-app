@@ -73,7 +73,9 @@ export async function loadCloudState(userId) {
         productMappings: Array.isArray(preferences.productMappings) ? preferences.productMappings : [],
         productNormalizations: Array.isArray(preferences.productNormalizations) ? preferences.productNormalizations : [],
         deletedListItems: Array.isArray(list.deletedListItems) ? list.deletedListItems : Array.isArray(preferences.deletedListItems) ? preferences.deletedListItems : [],
-        updatedAt: preferences.updatedAt || null,
+        // A lista e as preferências são gravadas em operações separadas. A data
+        // da própria lista é a fonte mais recente para resolver conflitos nela.
+        updatedAt: list.updatedAt || preferences.updatedAt || null,
       },
     }
   }
@@ -94,7 +96,7 @@ async function syncCollection(batch, userId, name, entries) {
   entries.forEach((entry) => batch.set(doc(db, 'users', userId, name, String(entry.id)), entry))
 }
 
-export async function saveCloudState(userId, state, userProfile) {
+export async function saveCloudState(userId, state, userProfile, baseState = {}) {
   const listRef = doc(db, 'users', userId, 'shoppingList', 'current')
   const savedState = await runTransaction(db, async (transaction) => {
     const snapshot = await transaction.get(listRef)
@@ -112,7 +114,9 @@ export async function saveCloudState(userId, state, userProfile) {
       deletedListItems: remoteList.deletedListItems || [],
       updatedAt: remoteList.updatedAt || null,
     }
-    const merged = mergeSyncedStates({}, state, remoteState)
+    // Com uma base conhecida, uma alteração local vence uma cópia remota que
+    // não mudou mesmo quando os relógios dos aparelhos estão dessincronizados.
+    const merged = mergeSyncedStates(baseState, state, remoteState)
     const mergedList = merged.lists?.[0] || { id: 'shopping-list', name: 'Lista de mercado', items: [] }
     transaction.set(listRef, { ...mergedList, deletedListItems: merged.deletedListItems || [], updatedAt: merged.updatedAt || new Date().toISOString() })
     return merged
