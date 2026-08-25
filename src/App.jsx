@@ -230,7 +230,7 @@ function AnalyticsPage({ state }) {
     {!state.purchases.length ? <Empty icon={BarChart3} title="Seus indicadores aparecerão aqui" text="Registre uma compra para começar a acompanhar gastos, preços, mercados e categorias."/> : !filteredState.purchases.length ? <Empty icon={CalendarClock} title="Nenhuma compra neste período" text="Selecione um intervalo maior para visualizar seus indicadores."/> : <>
       {section === 'summary' && <AnalyticsSummary analytics={analytics}/>}
       {section === 'products' && <><div className="analytics-section-heading"><div><h2>Comparativo de preços</h2><p>Valores normalizados por kg, litro ou unidade quando possível.</p></div><div className="search"><Search size={18}/><input placeholder="Buscar produto" value={query} onChange={(e) => setQuery(e.target.value)}/></div></div>
-        {rows.length ? <div className="price-grid">{rows.map((row) => <article className={`price-card category-${categoryKey(row.category)}`} key={row.id}><div className="price-title"><CategoryIcon category={row.category}/><div><h3>{row.name}</h3>{row.variant && <small className="analytics-variant">{row.variant}</small>}<small className="price-context">{row.count} reg. · {shortDate(row.latestDate)} · {row.markets.length} {row.markets.length === 1 ? 'mercado' : 'mercados'}</small></div></div><div className="metrics"><div><small>Atual</small><b>{money(row.latest)}</b></div><div><small>Menor</small><b className="green">{money(row.min)}</b></div><div><small>Maior</small><b>{money(row.max)}</b></div></div>{row.unit && <span className="analytics-normalized">Melhor / {row.unit}: <b>{money(row.normalizedMin)}</b></span>}</article>)}</div> : <Empty icon={Search} title="Nenhum produto encontrado" text="Tente buscar por outro nome."/>}</>}
+        {rows.length ? <div className="price-grid">{rows.map((row) => <article className={`price-card category-${categoryKey(row.category)}`} key={row.id}><div className="price-title"><CategoryIcon category={row.category}/><div><h3>{row.name}</h3>{row.variant && <small className="analytics-variant">{row.variant}</small>}<small className="price-context">{row.count} reg. · {shortDate(row.latestDate)} · {row.markets.length} {row.markets.length === 1 ? 'mercado' : 'mercados'}</small></div></div><div className="metrics"><div><small>Atual</small><b>{money(row.latest)}</b></div><div><small>Menor</small><b className="green">{money(row.min)}</b></div><div><small>Maior</small><b>{money(row.max)}</b></div></div><PriceSparkline history={row.history}/>{row.unit && <span className="analytics-normalized">Melhor / {row.unit}: <b>{money(row.normalizedMin)}</b></span>}</article>)}</div> : <Empty icon={Search} title="Nenhum produto encontrado" text="Tente buscar por outro nome."/>}</>}
       {section === 'markets' && <MarketAnalytics rows={analytics.markets}/>}
       {section === 'categories' && <CategoryAnalytics rows={analytics.categories} total={analytics.totalSpent}/>}
     </>}
@@ -264,6 +264,39 @@ function MarketAnalytics({ rows }) {
 
 function CategoryAnalytics({ rows, total }) {
   return <div><div className="analytics-section-heading"><div><h2>Gastos por categoria</h2><p>Veja quais grupos têm mais peso no seu orçamento.</p></div></div><div className="category-analytics-grid">{rows.map((row) => { const percentage = total ? row.total / total * 100 : 0; return <article className={`category-analytics-card category-${categoryKey(row.name)}`} key={row.name}><div className="category-analytics-title"><CategoryIcon category={row.name} size={20}/><div><b>{row.name}</b><small>{row.itemCount} {row.itemCount === 1 ? 'item comprado' : 'itens comprados'}</small></div><strong>{formatNumber(percentage, 0)}%</strong></div><div className="category-analytics-value"><strong>{money(row.total)}</strong><small>média de {money(row.averageItem)} por item</small></div><span className="category-progress"><i style={{ width: `${percentage}%` }}/></span></article> })}</div></div>
+}
+
+function PriceSparkline({ history }) {
+  const points = history.filter((entry) => Number.isFinite(entry.value) && entry.value > 0)
+  if (!points.length) return null
+  const width = 280
+  const height = 58
+  const padding = 5
+  const values = points.map((entry) => entry.value)
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  const range = max - min
+  const coordinates = points.map((entry, index) => ({
+    x: points.length === 1 ? width / 2 : padding + index * (width - padding * 2) / (points.length - 1),
+    y: range ? padding + (max - entry.value) / range * (height - padding * 2) : height / 2,
+  }))
+  const line = coordinates.map((point, index) => `${index ? 'L' : 'M'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ')
+  const area = `${line} L ${coordinates.at(-1).x.toFixed(2)} ${height} L ${coordinates[0].x.toFixed(2)} ${height} Z`
+  const first = points[0]
+  const latest = points.at(-1)
+  const change = points.length > 1 && first.value ? (latest.value - first.value) / first.value * 100 : null
+  const trend = change == null || Math.abs(change) < 0.05 ? 'stable' : change > 0 ? 'up' : 'down'
+  const trendText = change == null ? 'Apenas um registro' : `${change > 0 ? '+' : ''}${formatNumber(change, 1)}%`
+
+  return <div className={`price-sparkline trend-${trend}`}>
+    <div className="sparkline-heading"><span>Evolução no período</span><b>{trendText}</b></div>
+    <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={`Evolução do preço: de ${money(first.value)} para ${money(latest.value)}`}>
+      <path className="sparkline-area" d={area}/>
+      <path className="sparkline-line" d={line}/>
+      {coordinates.map((point, index) => <circle key={`${points[index].date}-${index}`} className="sparkline-point" cx={point.x} cy={point.y} r={index === coordinates.length - 1 ? 3.5 : 2}/>) }
+    </svg>
+    <div className="sparkline-dates"><span>{shortDate(first.date)}</span><span>{shortDate(latest.date)}</span></div>
+  </div>
 }
 
 function ProductsPage({ state, mutate, open }) {
@@ -1159,7 +1192,8 @@ function priceRows(state) {
     const sorted = [...group.entries].sort((first, second) => new Date(second.date) - new Date(first.date))
     const normalizedUnit = group.entries.find((entry) => entry.unit)?.unit
     const comparable = group.entries.filter((entry) => entry.unit === normalizedUnit && Number.isFinite(entry.normalizedValue))
-    return { ...group, count: group.entries.length, latest: sorted[0].raw, latestDate: sorted[0].date, min: Math.min(...group.entries.map((entry) => entry.raw)), max: Math.max(...group.entries.map((entry) => entry.raw)), normalizedMin: comparable.length ? Math.min(...comparable.map((entry) => entry.normalizedValue)) : null, unit: normalizedUnit, markets: [...new Set(group.entries.map((entry) => entry.market))], entries: undefined }
+    const history = [...group.entries].sort((first, second) => new Date(first.date) - new Date(second.date)).map((entry) => ({ date: entry.date, value: entry.raw }))
+    return { ...group, count: group.entries.length, latest: sorted[0].raw, latestDate: sorted[0].date, min: Math.min(...group.entries.map((entry) => entry.raw)), max: Math.max(...group.entries.map((entry) => entry.raw)), normalizedMin: comparable.length ? Math.min(...comparable.map((entry) => entry.normalizedValue)) : null, unit: normalizedUnit, markets: [...new Set(group.entries.map((entry) => entry.market))], history, entries: undefined }
   }).sort((first, second) => `${first.name} ${first.variant}`.localeCompare(`${second.name} ${second.variant}`, 'pt-BR'))
 }
 
