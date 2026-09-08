@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Apple, Archive, ArrowLeftRight, BarChart3, Bath, Beef, CalendarClock, Check, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, Eye, EyeOff, GitMerge, LayoutGrid, List, ListChecks, LogIn, LogOut, Milk, Moon, Package, PackageCheck, PackagePlus, PackageSearch, Pencil, Plus, ReceiptText, Search, Settings, Share2, ShoppingBasket, SprayCan, Store, Sun, Tags, Trash2, TrendingUp, X } from 'lucide-react'
+import { AlertTriangle, Apple, Archive, ArrowLeftRight, BarChart3, Bath, Beef, CalendarClock, Check, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, Eye, EyeOff, GitMerge, LayoutGrid, List, ListChecks, LogIn, LogOut, Milk, Minus, Moon, Package, PackageCheck, PackagePlus, PackageSearch, Pencil, Plus, ReceiptText, Search, Settings, Share2, ShoppingBasket, SprayCan, Store, Sun, Tags, Trash2, TrendingUp, X } from 'lucide-react'
 import { signOut } from 'firebase/auth'
 import { auth, firebaseReady, loginWithGoogle } from './firebase'
 import { CATEGORIES, RECEIPT_PROMPT, UNITS, dateTimeLocal, defaultUnitForProduct, money, normalizeImport, normalizeText, normalizedPrice, nowIso, onlyDigits, parseJsonInput, shortDate, uid } from './data'
@@ -124,20 +124,76 @@ function ShoppingListPage({ state, mutate, open }) {
   const [viewMode, setViewMode] = useState(() => localStorage.getItem('shopping-list-view') || 'list')
   const [groupByCategory, setGroupByCategory] = useState(() => localStorage.getItem('shopping-list-grouped') === 'true')
   const [showItemEstimates, setShowItemEstimates] = useState(() => localStorage.getItem('shopping-list-item-estimates') === 'true')
+  const [drawerItem, setDrawerItem] = useState(null)
+
   useEffect(() => localStorage.setItem('shopping-list-view', viewMode), [viewMode])
   useEffect(() => localStorage.setItem('shopping-list-grouped', String(groupByCategory)), [groupByCategory])
   useEffect(() => localStorage.setItem('shopping-list-item-estimates', String(showItemEstimates)), [showItemEstimates])
-  const addProduct = (product) => mutate((s) => {
-    const productKey = normalizeText(product.name)
-    const existsInCatalog = s.products.some((saved) => normalizeText(saved.name) === productKey)
-    return {
-      ...s,
-      products: existsInCatalog
-        ? s.products.map((saved) => normalizeText(saved.name) === productKey ? { ...saved, archivedAt: null } : saved)
-        : [...s.products, { ...product, archivedAt: null }],
-      lists: s.lists.map((current) => ({ ...current, items: [...current.items, productToListItem(product)] })),
+
+  useEffect(() => {
+    if (drawerItem) {
+      const exists = list.items.find((item) => item.id === drawerItem.itemId)
+      if (!exists) {
+        setDrawerItem(null)
+      } else if (exists.quantity !== drawerItem.quantity) {
+        setDrawerItem((prev) => prev ? { ...prev, quantity: exists.quantity } : null)
+      }
     }
-  })
+  }, [list.items, drawerItem])
+
+  const addProduct = (product, customQuantity) => {
+    const lastQty = getLastPurchasedQuantity(state, product)
+    const hasHistory = hasPurchaseHistory(state, product)
+    const initialQty = customQuantity != null ? customQuantity : lastQty
+    const newItem = productToListItem(product, initialQty)
+    const productKey = normalizeText(product.name)
+    mutate((s) => {
+      const existsInCatalog = s.products.some((saved) => normalizeText(saved.name) === productKey)
+      return {
+        ...s,
+        products: existsInCatalog
+          ? s.products.map((saved) => normalizeText(saved.name) === productKey ? { ...saved, archivedAt: null } : saved)
+          : [...s.products, { ...product, archivedAt: null }],
+        lists: s.lists.map((current) => ({ ...current, items: [...current.items, newItem] })),
+      }
+    })
+    setDrawerItem({
+      itemId: newItem.id,
+      product,
+      name: newItem.name,
+      variety: newItem.variety || '',
+      brand: newItem.brand || '',
+      category: newItem.category,
+      unit: newItem.unit,
+      quantity: newItem.quantity,
+      lastPurchasedQty: hasHistory ? lastQty : null,
+    })
+    return newItem
+  }
+
+  const updateDrawerQuantity = (itemId, newQuantity) => {
+    const qty = Math.max(0.1, Number(Number(newQuantity).toFixed(1)))
+    mutate((s) => ({
+      ...s,
+      lists: s.lists.map((currentList) => ({
+        ...currentList,
+        items: currentList.items.map((item) => item.id === itemId ? { ...item, quantity: qty } : item)
+      }))
+    }))
+    setDrawerItem((prev) => prev && prev.itemId === itemId ? { ...prev, quantity: qty } : prev)
+  }
+
+  const removeDrawerItem = (itemId) => {
+    mutate((s) => ({
+      ...s,
+      lists: s.lists.map((currentList) => ({
+        ...currentList,
+        items: currentList.items.filter((item) => item.id !== itemId)
+      }))
+    }))
+    setDrawerItem(null)
+  }
+
   const toggleCompleted = (itemId) => mutate((s) => ({ ...s, lists: s.lists.map((current) => ({ ...current, items: current.items.map((item) => item.id === itemId ? { ...item, checked: !item.checked } : item) })) }))
   const renderItem = (item) => <ShoppingListItem key={item.id} item={item} estimatedPrice={showItemEstimates ? estimatedPriceForListItem(state, item) : null} showEstimate={showItemEstimates} onToggle={() => toggleCompleted(item.id)} onOpenEdit={() => open({ type: 'item', item })}/>
   const pendingItems = list.items.filter((item) => !item.checked)
@@ -147,7 +203,7 @@ function ShoppingListPage({ state, mutate, open }) {
     .filter((group) => group.items.length)
   const clearCompleted = () => mutate((s) => ({ ...s, lists: s.lists.map((current) => ({ ...current, items: current.items.filter((item) => !item.checked) })) }))
   return <><PageHeader title="Lista de mercado"/>
-    <div className="shopping-list-search-controls"><InlineProductSearch products={state.products} list={list} state={state} onAdd={addProduct}/></div>
+    <div className="shopping-list-search-controls"><InlineProductSearch products={state.products} list={list} state={state} onAdd={addProduct} hasActiveDrawer={Boolean(drawerItem)}/></div>
     <div className="toolbar shopping-list-toolbar"><span className="list-count">{list.items.length} {list.items.length === 1 ? 'item' : 'itens'}</span><div className="list-view-actions">{list.items.length > 0 && <button className="share-list-button" aria-label="Compartilhar lista" title="Compartilhar lista" onClick={() => open({ type: 'share-list' })}><Share2 size={16}/><span>Compartilhar</span></button>}<button className={`group-toggle ${groupByCategory ? 'active' : ''}`} aria-label="Agrupar por categoria" title="Agrupar por categoria" aria-pressed={groupByCategory} onClick={() => setGroupByCategory((current) => !current)}><Tags size={16}/><span>Agrupar por categoria</span></button><div className="view-toggle" aria-label="Modo de visualização"><button className={viewMode === 'list' ? 'active' : ''} title="Visualizar em lista" aria-label="Visualizar em lista" aria-pressed={viewMode === 'list'} onClick={() => setViewMode('list')}><List size={18}/></button><button className={viewMode === 'grid' ? 'active' : ''} title="Visualizar em grade" aria-label="Visualizar em grade" aria-pressed={viewMode === 'grid'} onClick={() => setViewMode('grid')}><LayoutGrid size={18}/></button></div></div></div>
     {list.items.length > 0 && <section className={`shopping-estimate ${estimate.pricedCount ? '' : 'empty'}`} aria-label="Estimativa do valor da compra">
       <span className="shopping-estimate-icon"><CircleDollarSign size={18}/></span>
@@ -159,6 +215,7 @@ function ShoppingListPage({ state, mutate, open }) {
       {pendingItems.length > 0 && (groupByCategory ? <div className="category-groups">{groups.map((group) => <section className={`category-group category-${categoryKey(group.category)}`} key={group.category}><header><CategoryIcon category={group.category} size={17}/><div><h2>{group.category}</h2><span>{group.items.length} {group.items.length === 1 ? 'item' : 'itens'}</span></div></header><div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{group.items.map(renderItem)}</div></section>)}</div> : <div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{pendingItems.map(renderItem)}</div>)}
       {completedItems.length > 0 && <section className="completed-items-group"><header><div><h2>Concluídos</h2><span>{completedItems.length} {completedItems.length === 1 ? 'item' : 'itens'}</span></div><button className="clear-completed" onClick={clearCompleted}><Trash2 size={15}/> Limpar concluídos</button></header><div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{completedItems.map(renderItem)}</div></section>}
     </div> : <Empty icon={ShoppingBasket} title="Sua lista está vazia" text="Use a busca acima para adicionar o primeiro produto."/>}
+    {drawerItem && <QuantityDrawer drawerItem={drawerItem} onUpdateQuantity={updateDrawerQuantity} onRemove={removeDrawerItem} onClose={() => setDrawerItem(null)} />}
   </>
 }
 
@@ -381,7 +438,7 @@ function SettingsPage({ state, mutate, user, open, toast }) {
   </div></>
 }
 
-function InlineProductSearch({ products, list, state, onAdd }) {
+function InlineProductSearch({ products, list, state, onAdd, hasActiveDrawer = false }) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const containerRef = useRef(null)
@@ -390,7 +447,15 @@ function InlineProductSearch({ products, list, state, onAdd }) {
   const normalizedQuery = normalizeText(query)
   const activeProducts = products.filter((product) => !product.archivedAt)
   const results = normalizedQuery
-    ? activeProducts.filter((product) => normalizeText(`${product.name} ${product.category} ${normalizeProductVariants(product.variants).map((variant) => `${variant.variety} ${variant.brand}`).join(' ')}`).includes(normalizedQuery)).sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')).slice(0, 10)
+    ? activeProducts
+        .filter((product) => normalizeText(`${product.name} ${product.category} ${normalizeProductVariants(product.variants).map((variant) => `${variant.variety} ${variant.brand}`).join(' ')}`).includes(normalizedQuery))
+        .sort((a, b) => {
+          const aHasVariants = normalizeProductVariants(a.variants).length > 0 ? 1 : 0
+          const bHasVariants = normalizeProductVariants(b.variants).length > 0 ? 1 : 0
+          if (aHasVariants !== bHasVariants) return bHasVariants - aHasVariants
+          return a.name.localeCompare(b.name, 'pt-BR')
+        })
+        .slice(0, 10)
     : []
   const variantResults = normalizedQuery
     ? activeProducts.flatMap((product) => normalizeProductVariants(product.variants).filter((variant) => normalizeText(`${product.name} ${variant.variety} ${variant.brand} ${variant.packageSize} ${variant.packageUnit}`).includes(normalizedQuery)).map((variant) => ({ ...product, selectedVariant: variant }))).sort((a, b) => `${a.name} ${a.selectedVariant.variety} ${a.selectedVariant.brand}`.localeCompare(`${b.name} ${b.selectedVariant.variety} ${b.selectedVariant.brand}`, 'pt-BR')).slice(0, 14)
@@ -416,18 +481,31 @@ function InlineProductSearch({ products, list, state, onAdd }) {
     setQuery('')
   }
   return <div className="inline-autocomplete" ref={containerRef}>
-    <div className={`autocomplete-search ${open ? 'open' : ''}`}><Search size={20}/><input ref={inputRef} role="combobox" aria-controls="product-options" aria-expanded={open} placeholder="Adicionar produto..." value={query} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); setOpen(true) }} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); if (event.key === 'Enter' && (results[0] || variantResults[0])) { event.preventDefault(); add(results[0] || variantResults[0]) } }}/><span className="search-hint">Digite para buscar</span></div>
-    {open && <div className="autocomplete-popover" onPointerDown={(event) => { if (event.target.closest('button')) event.preventDefault() }}><div className="popover-heading"><b>{normalizedQuery ? 'Resultados' : 'Sugeridos para você'}</b><small>{normalizedQuery ? 'Produtos primeiro, variedades no final' : 'Organizados pela próxima compra'}</small></div><div className="autocomplete-results" id="product-options" role="listbox">
-        {normalizedQuery ? results.map((product) => { const alreadyAdded = included.has(productSelectionKey(product)); return <SuggestionButton key={product.id} product={product} alreadyAdded={alreadyAdded} onAdd={add}/> }) : suggestionGroups.map((group) => <section className="suggestion-group" key={group.id}><header><div><b>{group.label}</b><small>{group.description}</small></div><button onClick={() => addGroup(group.products)}>Adicionar todos</button></header>{group.products.map((product) => <SuggestionButton key={product.id} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add} meta={product.suggestionMeta}/>)}</section>)}
-        {query.trim() && !hasExactProduct && <button className="custom-product category-outros" onClick={() => add({ id: uid(), name: query.trim(), category: 'Outros', defaultUnit: 'un', brands: [], variants: [] })}><CategoryIcon category="Outros"/><span className="grow"><span className="new-title"><b>Criar “{query.trim()}”</b><em>Novo</em></span><small>Novo produto · unidade</small></span><Plus size={19}/></button>}
-        {normalizedQuery && variantResults.length > 0 && <div className="variant-results-heading"><b>Variedades</b><small>Selecione uma opção específica</small></div>}
-        {normalizedQuery && variantResults.map((product) => <SuggestionButton key={`${product.id}-${product.selectedVariant.id}`} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add} variant/>)}
-        {!results.length && !query.trim() && !suggestionGroups.length && <p className="autocomplete-empty">Registre uma compra para começarmos a prever quando os produtos vão faltar.</p>}
+    <div className={`autocomplete-search ${open ? 'open' : ''}`}><Search size={20}/><input ref={inputRef} role="combobox" aria-controls="product-options" aria-expanded={open} placeholder="Adicionar produto..." value={query} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); setOpen(true) }} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); if (event.key === 'Enter' && (variantResults[0] || results[0])) { event.preventDefault(); add(variantResults[0] || results[0]) } }}/><span className="search-hint">Digite para buscar</span></div>
+    {open && <div className="autocomplete-popover" onPointerDown={(event) => { if (event.target.closest('button')) event.preventDefault() }}><div className="popover-heading"><b>{normalizedQuery ? 'Resultados' : 'Sugeridos para você'}</b><small>{normalizedQuery ? 'Variedades primeiro, outros a seguir' : 'Organizados pela próxima compra'}</small></div><div className={`autocomplete-results ${hasActiveDrawer ? 'with-drawer' : ''}`} id="product-options" role="listbox">
+        {normalizedQuery ? <>
+          {variantResults.length > 0 && <div className="variant-results-heading first-variant-heading"><b>Variedades cadastradas</b><small>Opções específicas no topo</small></div>}
+          {variantResults.map((product) => <SuggestionButton key={`${product.id}-${product.selectedVariant.id}`} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add} variant/>)}
+          {variantResults.length > 0 && results.length > 0 && <div className="variant-results-heading"><b>Outros produtos</b><small>Catálogo geral</small></div>}
+          {results.map((product) => {
+            const alreadyAdded = included.has(productSelectionKey(product))
+            const variantCount = normalizeProductVariants(product.variants).length
+            const meta = variantCount > 0 ? `${variantCount} ${variantCount === 1 ? 'variedade cadastrada' : 'variedades cadastradas'}` : null
+            return <SuggestionButton key={product.id} product={product} alreadyAdded={alreadyAdded} onAdd={add} meta={meta}/>
+          })}
+        </> : suggestionGroups.map((group) => <section className="suggestion-group" key={group.id}><header><div><b>{group.label}</b><small>{group.description}</small></div><button onPointerDown={(e) => e.preventDefault()} onClick={() => addGroup(group.products)}>Adicionar todos</button></header>{group.products.map((product) => <SuggestionButton key={product.id} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add} meta={product.suggestionMeta}/>)}</section>)}
+        {query.trim() && !hasExactProduct && <button className="custom-product category-outros" onPointerDown={(e) => e.preventDefault()} onClick={() => add({ id: uid(), name: query.trim(), category: 'Outros', defaultUnit: 'un', brands: [], variants: [] })}><CategoryIcon category="Outros"/><span className="grow"><span className="new-title"><b>Criar “{query.trim()}”</b><em>Novo</em></span><small>Novo produto · unidade</small></span><Plus size={19}/></button>}
+        {!results.length && !variantResults.length && !query.trim() && !suggestionGroups.length && <p className="autocomplete-empty">Registre uma compra para começarmos a prever quando os produtos vão faltar.</p>}
+        {!results.length && !variantResults.length && query.trim() && <p className="autocomplete-empty">Nenhum produto cadastrado encontrado com este nome.</p>}
       </div></div>}
   </div>
 }
 
-function SuggestionButton({ product, alreadyAdded = false, onAdd, meta, variant = false }) { const selected = product.selectedVariant; return <button className={`category-${categoryKey(product.category)} ${variant ? 'variant-result' : ''}`} role="option" aria-selected={alreadyAdded} disabled={alreadyAdded} onClick={() => onAdd(product)}><CategoryIcon category={product.category}/><span className="grow"><b>{variant ? [product.name, selected?.variety].filter(Boolean).join(' · ') : product.name}</b><small>{meta || (variant ? [selected?.brand, `${selected?.packageSize} ${selected?.packageUnit}`].filter(Boolean).join(' · ') : `${product.category} · ${product.defaultUnit || defaultUnitForProduct(product.name, product.category)}`)}</small></span>{alreadyAdded ? <span className="added-label"><Check size={15}/> Na lista</span> : <Plus size={19}/>}</button> }
+function SuggestionButton({ product, alreadyAdded = false, onAdd, meta, variant = false }) {
+  const selected = product.selectedVariant
+  const variantCount = normalizeProductVariants(product.variants).length
+  return <button className={`category-${categoryKey(product.category)} ${variant ? 'variant-result' : ''}`} role="option" aria-selected={alreadyAdded} disabled={alreadyAdded} onPointerDown={(event) => event.preventDefault()} onClick={() => onAdd(product)}><CategoryIcon category={product.category}/><span className="grow"><b>{variant ? [product.name, selected?.variety].filter(Boolean).join(' · ') : product.name}</b><small>{meta || (variant ? [selected?.brand, `${selected?.packageSize} ${selected?.packageUnit}`].filter(Boolean).join(' · ') : `${product.category} · ${product.defaultUnit || defaultUnitForProduct(product.name, product.category)}${variantCount > 0 ? ` · ${variantCount} ${variantCount === 1 ? 'variedade' : 'variedades'}` : ''}`)}</small></span>{alreadyAdded ? <span className="added-label"><Check size={15}/> Na lista</span> : <Plus size={19}/>}</button>
+}
 
 function ItemPanel({ item: initial, state, onClose, onSave, onDelete, onEditProduct }) {
   const [item, setItem] = useState(initial)
@@ -1145,7 +1223,48 @@ function groupedProductSuggestions(state, list) {
 }
 function productSelectionKey(product) { const productKey = product.id || normalizeText(product.name); return product.selectedVariant ? `product:${productKey}|variant:${product.selectedVariant.id}` : `product:${productKey}|base` }
 function listItemSelectionKey(item) { const productKey = item.productId || normalizeText(item.name); return item.variantId ? `product:${productKey}|variant:${item.variantId}` : `product:${productKey}|base` }
-function productToListItem(product) { const variant = product.selectedVariant; return { id: uid(), productId: product.id, name: product.name, quantity: 1, unit: product.defaultUnit || defaultUnitForProduct(product.name, product.category), category: product.category || 'Outros', note: '', checked: false, ...(variant ? { variantId: variant.id, variety: variant.variety || '', brand: variant.brand || '', packageSize: variant.packageSize, packageUnit: variant.packageUnit } : {}) } }
+function productToListItem(product, quantity = 1) {
+  const variant = product.selectedVariant
+  const qty = quantity != null ? Number(quantity) : 1
+  return {
+    id: uid(),
+    productId: product.id,
+    name: product.name,
+    quantity: Math.max(0.1, Number(qty) || 1),
+    unit: product.defaultUnit || defaultUnitForProduct(product.name, product.category),
+    category: product.category || 'Outros',
+    note: '',
+    checked: false,
+    ...(variant ? {
+      variantId: variant.id,
+      variety: variant.variety || '',
+      brand: variant.brand || '',
+      packageSize: variant.packageSize,
+      packageUnit: variant.packageUnit
+    } : {})
+  }
+}
+function getLastPurchasedQuantity(state, product) {
+  if (product.selectedVariant) {
+    const variantHistory = purchaseHistoryForVariant(state, product, product.selectedVariant)
+    if (variantHistory.length && Number(variantHistory[0].item?.quantity) > 0) {
+      return Number(variantHistory[0].item.quantity)
+    }
+  }
+  const generalHistory = purchaseHistoryFor(state, product.name)
+  if (generalHistory.length && Number(generalHistory[0].item?.quantity) > 0) {
+    return Number(generalHistory[0].item.quantity)
+  }
+  return 1
+}
+function hasPurchaseHistory(state, product) {
+  if (product.selectedVariant) {
+    const variantHistory = purchaseHistoryForVariant(state, product, product.selectedVariant)
+    if (variantHistory.length && Number(variantHistory[0].item?.quantity) > 0) return true
+  }
+  const generalHistory = purchaseHistoryFor(state, product.name)
+  return generalHistory.length > 0 && Number(generalHistory[0].item?.quantity) > 0
+}
 function purchaseHistoryFor(state, name) { return state.purchases.flatMap((purchase) => purchase.items.filter((item) => normalizeText(item.productName) === normalizeText(name)).map((item) => ({ purchase, item }))).sort((a, b) => new Date(b.purchase.purchasedAt) - new Date(a.purchase.purchasedAt)) }
 function purchaseHistoryForVariant(state, product, variant) { return state.purchases.flatMap((purchase) => purchase.items.filter((item) => item.variantId ? item.variantId === variant.id : normalizeText(item.productName) === normalizeText(product.name) && variantMatchesItem(variant, item)).map((item) => ({ purchase, item }))).sort((a, b) => new Date(b.purchase.purchasedAt) - new Date(a.purchase.purchasedAt)) }
 function priceHistoryForListItem(state, product, listItem) {
@@ -1265,3 +1384,116 @@ function periodComparison(purchases, period, currentTotal) {
 
 function periodStart(period) { const date = new Date(); date.setHours(0, 0, 0, 0); date.setDate(date.getDate() - Number(period)); return date }
 function formatNumber(value, digits = 0) { return new Intl.NumberFormat('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(Number(value) || 0) }
+
+function QuantityDrawer({ drawerItem, onUpdateQuantity, onRemove, onClose }) {
+  if (!drawerItem) return null
+  const { itemId, name, variety, brand, category, unit, quantity, lastPurchasedQty } = drawerItem
+  const isDecimalUnit = ['kg', 'g', 'L', 'ml'].includes(unit)
+  const step = isDecimalUnit ? 0.5 : 1
+  const variantLabel = [variety, brand].filter(Boolean).join(' · ')
+  const isLastPurchase = lastPurchasedQty != null && Number(lastPurchasedQty) === Number(quantity)
+
+  const change = (delta) => {
+    const next = Math.max(0.1, Number((Number(quantity) + delta).toFixed(1)))
+    onUpdateQuantity(itemId, next)
+  }
+
+  const setFixed = (val) => {
+    onUpdateQuantity(itemId, Math.max(0.1, val))
+  }
+
+  return (
+    <aside className={`quantity-drawer category-${categoryKey(category)}`} aria-label="Ajustar quantidade do produto">
+      <div className="quantity-drawer-inner">
+        <div className="quantity-drawer-header">
+          <CategoryIcon category={category} size={20} />
+          <div className="quantity-drawer-info">
+            <div className="quantity-drawer-title">
+              <b>{name}</b>
+              {variantLabel && <span className="quantity-drawer-variant">{variantLabel}</span>}
+            </div>
+            <small className="quantity-drawer-meta">
+              {lastPurchasedQty != null ? (
+                <span className="last-purchase-tag">
+                  {isLastPurchase ? `Última compra: ${lastPurchasedQty} ${unit} (padrão aplicado)` : `Última compra: ${lastPurchasedQty} ${unit}`}
+                </span>
+              ) : (
+                <span className="new-item-tag">Primeira vez na lista</span>
+              )}
+            </small>
+          </div>
+          <button
+            type="button"
+            className="quantity-drawer-close"
+            aria-label="Fechar gaveta"
+            title="Fechar"
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={onClose}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="quantity-drawer-controls">
+          <div className="quantity-drawer-stepper">
+            <button
+              type="button"
+              className="drawer-step-button"
+              aria-label="Diminuir quantidade"
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => {
+                if (quantity <= step) {
+                  onRemove(itemId)
+                } else {
+                  change(-step)
+                }
+              }}
+            >
+              {quantity <= step ? <Trash2 size={16} /> : <Minus size={18} />}
+            </button>
+            <span className="drawer-qty-value">
+              <strong>{formatNumber(quantity, isDecimalUnit && quantity % 1 !== 0 ? 1 : 0)}</strong>
+              <small>{unit}</small>
+            </span>
+            <button
+              type="button"
+              className="drawer-step-button"
+              aria-label="Aumentar quantidade"
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => change(step)}
+            >
+              <Plus size={18} />
+            </button>
+          </div>
+
+          <div className="drawer-quick-actions">
+            {isDecimalUnit ? (
+              <>
+                <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(0.5)}>+0.5</button>
+                <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(1)}>+1</button>
+                <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(2)}>+2</button>
+              </>
+            ) : (
+              <>
+                <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(1)}>+1</button>
+                <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(2)}>+2</button>
+                <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(5)}>+5</button>
+              </>
+            )}
+            {lastPurchasedQty != null && Number(lastPurchasedQty) !== Number(quantity) && (
+              <button
+                type="button"
+                className="drawer-repeat-button"
+                onPointerDown={(e) => e.preventDefault()}
+                onClick={() => setFixed(Number(lastPurchasedQty))}
+              >
+                Última ({lastPurchasedQty})
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </aside>
+  )
+}
+
