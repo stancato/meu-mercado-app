@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Apple, Archive, ArrowLeftRight, BarChart3, Bath, Beef, CalendarClock, Check, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, Eye, EyeOff, GitMerge, LayoutGrid, List, ListChecks, LogIn, LogOut, Milk, Minus, Moon, Package, PackageCheck, PackagePlus, PackageSearch, Pencil, Plus, ReceiptText, Search, Settings, Share2, ShoppingBasket, SprayCan, Store, Sun, Tags, Trash2, TrendingUp, X } from 'lucide-react'
+import { AlertTriangle, Apple, Archive, ArrowLeftRight, BarChart3, Bath, Beef, CalendarClock, Check, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, Eye, EyeOff, GitMerge, LayoutGrid, List, ListChecks, LogIn, LogOut, Milk, Minus, Moon, Package, PackageCheck, PackagePlus, PackageSearch, Pencil, Plus, ReceiptText, RotateCcw, Search, Settings, Share2, ShoppingBasket, SprayCan, Store, Sun, Tags, Trash2, TrendingUp, X } from 'lucide-react'
 import { signOut } from 'firebase/auth'
 import { auth, firebaseReady, loginWithGoogle } from './firebase'
 import { CATEGORIES, RECEIPT_PROMPT, UNITS, dateTimeLocal, defaultUnitForProduct, money, normalizeImport, normalizeText, normalizedPrice, nowIso, onlyDigits, parseJsonInput, shortDate, uid } from './data'
@@ -203,7 +203,22 @@ function ShoppingListPage({ state, mutate, open }) {
     .filter((group) => group.items.length)
   const clearCompleted = () => mutate((s) => ({ ...s, lists: s.lists.map((current) => ({ ...current, items: current.items.filter((item) => !item.checked) })) }))
   return <><PageHeader title="Lista de mercado"/>
-    <div className="shopping-list-search-controls"><InlineProductSearch products={state.products} list={list} state={state} onAdd={addProduct} hasActiveDrawer={Boolean(drawerItem)}/></div>
+    <div className="shopping-list-search-controls">
+      <InlineProductSearch
+        products={state.products}
+        list={list}
+        state={state}
+        onAdd={addProduct}
+        topBar={drawerItem ? (
+          <TopQuantityBar
+            drawerItem={drawerItem}
+            onUpdateQuantity={updateDrawerQuantity}
+            onRemove={removeDrawerItem}
+            onClose={() => setDrawerItem(null)}
+          />
+        ) : null}
+      />
+    </div>
     <div className="toolbar shopping-list-toolbar"><span className="list-count">{list.items.length} {list.items.length === 1 ? 'item' : 'itens'}</span><div className="list-view-actions">{list.items.length > 0 && <button className="share-list-button" aria-label="Compartilhar lista" title="Compartilhar lista" onClick={() => open({ type: 'share-list' })}><Share2 size={16}/><span>Compartilhar</span></button>}<button className={`group-toggle ${groupByCategory ? 'active' : ''}`} aria-label="Agrupar por categoria" title="Agrupar por categoria" aria-pressed={groupByCategory} onClick={() => setGroupByCategory((current) => !current)}><Tags size={16}/><span>Agrupar por categoria</span></button><div className="view-toggle" aria-label="Modo de visualização"><button className={viewMode === 'list' ? 'active' : ''} title="Visualizar em lista" aria-label="Visualizar em lista" aria-pressed={viewMode === 'list'} onClick={() => setViewMode('list')}><List size={18}/></button><button className={viewMode === 'grid' ? 'active' : ''} title="Visualizar em grade" aria-label="Visualizar em grade" aria-pressed={viewMode === 'grid'} onClick={() => setViewMode('grid')}><LayoutGrid size={18}/></button></div></div></div>
     {list.items.length > 0 && <section className={`shopping-estimate ${estimate.pricedCount ? '' : 'empty'}`} aria-label="Estimativa do valor da compra">
       <span className="shopping-estimate-icon"><CircleDollarSign size={18}/></span>
@@ -215,7 +230,6 @@ function ShoppingListPage({ state, mutate, open }) {
       {pendingItems.length > 0 && (groupByCategory ? <div className="category-groups">{groups.map((group) => <section className={`category-group category-${categoryKey(group.category)}`} key={group.category}><header><CategoryIcon category={group.category} size={17}/><div><h2>{group.category}</h2><span>{group.items.length} {group.items.length === 1 ? 'item' : 'itens'}</span></div></header><div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{group.items.map(renderItem)}</div></section>)}</div> : <div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{pendingItems.map(renderItem)}</div>)}
       {completedItems.length > 0 && <section className="completed-items-group"><header><div><h2>Concluídos</h2><span>{completedItems.length} {completedItems.length === 1 ? 'item' : 'itens'}</span></div><button className="clear-completed" onClick={clearCompleted}><Trash2 size={15}/> Limpar concluídos</button></header><div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{completedItems.map(renderItem)}</div></section>}
     </div> : <Empty icon={ShoppingBasket} title="Sua lista está vazia" text="Use a busca acima para adicionar o primeiro produto."/>}
-    {drawerItem && <QuantityDrawer drawerItem={drawerItem} onUpdateQuantity={updateDrawerQuantity} onRemove={removeDrawerItem} onClose={() => setDrawerItem(null)} />}
   </>
 }
 
@@ -438,7 +452,7 @@ function SettingsPage({ state, mutate, user, open, toast }) {
   </div></>
 }
 
-function InlineProductSearch({ products, list, state, onAdd, hasActiveDrawer = false }) {
+function InlineProductSearch({ products, list, state, onAdd, topBar = null }) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const containerRef = useRef(null)
@@ -455,10 +469,10 @@ function InlineProductSearch({ products, list, state, onAdd, hasActiveDrawer = f
           if (aHasVariants !== bHasVariants) return bHasVariants - aHasVariants
           return a.name.localeCompare(b.name, 'pt-BR')
         })
-        .slice(0, 10)
+        .slice(0, 12)
     : []
   const variantResults = normalizedQuery
-    ? activeProducts.flatMap((product) => normalizeProductVariants(product.variants).filter((variant) => normalizeText(`${product.name} ${variant.variety} ${variant.brand} ${variant.packageSize} ${variant.packageUnit}`).includes(normalizedQuery)).map((variant) => ({ ...product, selectedVariant: variant }))).sort((a, b) => `${a.name} ${a.selectedVariant.variety} ${a.selectedVariant.brand}`.localeCompare(`${b.name} ${b.selectedVariant.variety} ${b.selectedVariant.brand}`, 'pt-BR')).slice(0, 14)
+    ? activeProducts.flatMap((product) => normalizeProductVariants(product.variants).filter((variant) => normalizeText(`${product.name} ${variant.variety} ${variant.brand} ${variant.packageSize} ${variant.packageUnit}`).includes(normalizedQuery)).map((variant) => ({ ...product, selectedVariant: variant }))).sort((a, b) => `${a.name} ${a.selectedVariant.variety} ${a.selectedVariant.brand}`.localeCompare(`${b.name} ${b.selectedVariant.variety} ${b.selectedVariant.brand}`, 'pt-BR')).slice(0, 16)
     : []
   const suggestionGroups = normalizedQuery ? [] : groupedProductSuggestions(state, list)
   const hasExactProduct = activeProducts.some((product) => normalizeText(product.name) === normalizedQuery)
@@ -482,29 +496,29 @@ function InlineProductSearch({ products, list, state, onAdd, hasActiveDrawer = f
   }
   return <div className="inline-autocomplete" ref={containerRef}>
     <div className={`autocomplete-search ${open ? 'open' : ''}`}><Search size={20}/><input ref={inputRef} role="combobox" aria-controls="product-options" aria-expanded={open} placeholder="Adicionar produto..." value={query} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); setOpen(true) }} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); if (event.key === 'Enter' && (variantResults[0] || results[0])) { event.preventDefault(); add(variantResults[0] || results[0]) } }}/><span className="search-hint">Digite para buscar</span></div>
-    {open && <div className="autocomplete-popover" onPointerDown={(event) => { if (event.target.closest('button')) event.preventDefault() }}><div className="popover-heading"><b>{normalizedQuery ? 'Resultados' : 'Sugeridos para você'}</b><small>{normalizedQuery ? 'Variedades primeiro, outros a seguir' : 'Organizados pela próxima compra'}</small></div><div className={`autocomplete-results ${hasActiveDrawer ? 'with-drawer' : ''}`} id="product-options" role="listbox">
+    {topBar}
+    {open && <div className="autocomplete-popover" onPointerDown={(event) => { if (event.target.closest('button')) event.preventDefault() }}><div className="popover-heading"><b>{normalizedQuery ? 'Resultados' : 'Sugeridos'}</b></div><div className="autocomplete-results" id="product-options" role="listbox">
         {normalizedQuery ? <>
-          {variantResults.length > 0 && <div className="variant-results-heading first-variant-heading"><b>Variedades cadastradas</b><small>Opções específicas no topo</small></div>}
-          {variantResults.map((product) => <SuggestionButton key={`${product.id}-${product.selectedVariant.id}`} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add} variant/>)}
-          {variantResults.length > 0 && results.length > 0 && <div className="variant-results-heading"><b>Outros produtos</b><small>Catálogo geral</small></div>}
-          {results.map((product) => {
-            const alreadyAdded = included.has(productSelectionKey(product))
-            const variantCount = normalizeProductVariants(product.variants).length
-            const meta = variantCount > 0 ? `${variantCount} ${variantCount === 1 ? 'variedade cadastrada' : 'variedades cadastradas'}` : null
-            return <SuggestionButton key={product.id} product={product} alreadyAdded={alreadyAdded} onAdd={add} meta={meta}/>
-          })}
-        </> : suggestionGroups.map((group) => <section className="suggestion-group" key={group.id}><header><div><b>{group.label}</b><small>{group.description}</small></div><button onPointerDown={(e) => e.preventDefault()} onClick={() => addGroup(group.products)}>Adicionar todos</button></header>{group.products.map((product) => <SuggestionButton key={product.id} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add} meta={product.suggestionMeta}/>)}</section>)}
-        {query.trim() && !hasExactProduct && <button className="custom-product category-outros" onPointerDown={(e) => e.preventDefault()} onClick={() => add({ id: uid(), name: query.trim(), category: 'Outros', defaultUnit: 'un', brands: [], variants: [] })}><CategoryIcon category="Outros"/><span className="grow"><span className="new-title"><b>Criar “{query.trim()}”</b><em>Novo</em></span><small>Novo produto · unidade</small></span><Plus size={19}/></button>}
+          {variantResults.length > 0 && <div className="variant-results-heading first-variant-heading full-width-heading"><b>Variedades cadastradas</b></div>}
+          <div className="results-grid">
+            {variantResults.map((product) => <SuggestionButton key={`${product.id}-${product.selectedVariant.id}`} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add} variant/>)}
+          </div>
+          {variantResults.length > 0 && results.length > 0 && <div className="variant-results-heading full-width-heading"><b>Outros produtos</b></div>}
+          <div className="results-grid">
+            {results.map((product) => <SuggestionButton key={product.id} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add}/>)}
+          </div>
+        </> : suggestionGroups.map((group) => <section className="suggestion-group" key={group.id}><header><b>{group.label}</b><button onPointerDown={(e) => e.preventDefault()} onClick={() => addGroup(group.products)}>Adicionar todos</button></header><div className="results-grid">{group.products.map((product) => <SuggestionButton key={product.id} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add}/>)}</div></section>)}
+        {query.trim() && !hasExactProduct && <button className="custom-product category-outros" onPointerDown={(e) => e.preventDefault()} onClick={() => add({ id: uid(), name: query.trim(), category: 'Outros', defaultUnit: 'un', brands: [], variants: [] })}><CategoryIcon category="Outros" size={18}/><span className="grow"><span className="new-title"><b>Criar “{query.trim()}”</b><em>Novo</em></span></span><Plus size={18}/></button>}
         {!results.length && !variantResults.length && !query.trim() && !suggestionGroups.length && <p className="autocomplete-empty">Registre uma compra para começarmos a prever quando os produtos vão faltar.</p>}
         {!results.length && !variantResults.length && query.trim() && <p className="autocomplete-empty">Nenhum produto cadastrado encontrado com este nome.</p>}
       </div></div>}
   </div>
 }
 
-function SuggestionButton({ product, alreadyAdded = false, onAdd, meta, variant = false }) {
+function SuggestionButton({ product, alreadyAdded = false, onAdd, variant = false }) {
   const selected = product.selectedVariant
-  const variantCount = normalizeProductVariants(product.variants).length
-  return <button className={`category-${categoryKey(product.category)} ${variant ? 'variant-result' : ''}`} role="option" aria-selected={alreadyAdded} disabled={alreadyAdded} onPointerDown={(event) => event.preventDefault()} onClick={() => onAdd(product)}><CategoryIcon category={product.category}/><span className="grow"><b>{variant ? [product.name, selected?.variety].filter(Boolean).join(' · ') : product.name}</b><small>{meta || (variant ? [selected?.brand, `${selected?.packageSize} ${selected?.packageUnit}`].filter(Boolean).join(' · ') : `${product.category} · ${product.defaultUnit || defaultUnitForProduct(product.name, product.category)}${variantCount > 0 ? ` · ${variantCount} ${variantCount === 1 ? 'variedade' : 'variedades'}` : ''}`)}</small></span>{alreadyAdded ? <span className="added-label"><Check size={15}/> Na lista</span> : <Plus size={19}/>}</button>
+  const variantLabel = variant ? [selected?.variety, selected?.brand].filter(Boolean).join(' · ') : null
+  return <button className={`category-${categoryKey(product.category)} ${variant ? 'variant-result' : ''}`} role="option" aria-selected={alreadyAdded} disabled={alreadyAdded} onPointerDown={(event) => event.preventDefault()} onClick={() => onAdd(product)}><CategoryIcon category={product.category} size={18}/><span className="suggestion-text"><b>{product.name}</b>{variantLabel && <small>{variantLabel}</small>}</span>{alreadyAdded ? <span className="added-label"><Check size={14}/></span> : <Plus size={16} className="suggestion-add-icon"/>}</button>
 }
 
 function ItemPanel({ item: initial, state, onClose, onSave, onDelete, onEditProduct }) {
@@ -1200,10 +1214,10 @@ function groupedProductSuggestions(state, list) {
   const inList = new Set(list.items.map((item) => normalizeText(item.name)))
   const now = new Date()
   const groups = [
-    { id: 'week', label: 'Para esta semana', description: 'Já está na hora ou falta pouco', maxDays: 7, products: [] },
-    { id: 'next-week', label: 'Para a próxima semana', description: 'Pode esperar mais alguns dias', maxDays: 14, products: [] },
-    { id: 'month', label: 'Para este mês', description: 'Planeje junto com a próxima compra', maxDays: 31, products: [] },
-    { id: 'next-month', label: 'Para o próximo mês', description: 'Ainda não precisa entrar na lista', maxDays: 62, products: [] },
+    { id: 'week', label: 'Para esta semana', maxDays: 7, products: [] },
+    { id: 'next-week', label: 'Para a próxima semana', maxDays: 14, products: [] },
+    { id: 'month', label: 'Para este mês', maxDays: 31, products: [] },
+    { id: 'next-month', label: 'Para o próximo mês', maxDays: 62, products: [] },
   ]
   state.products.forEach((product) => {
     if (product.archivedAt) return
@@ -1216,8 +1230,7 @@ function groupedProductSuggestions(state, list) {
     const daysUntil = Math.ceil((dueAt - now) / 86400000)
     const group = groups.find((candidate) => daysUntil <= candidate.maxDays)
     if (!group) return
-    const timing = daysUntil < 0 ? `atrasado há ${Math.abs(daysUntil)} dia${Math.abs(daysUntil) === 1 ? '' : 's'}` : daysUntil === 0 ? 'previsto para hoje' : `previsto em ${daysUntil} dia${daysUntil === 1 ? '' : 's'}`
-    group.products.push({ ...product, suggestionMeta: `${frequency.label} · ${timing}` })
+    group.products.push(product)
   })
   return groups.map((group) => ({ ...group, products: group.products.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')).slice(0, 10) })).filter((group) => group.products.length)
 }
@@ -1385,7 +1398,7 @@ function periodComparison(purchases, period, currentTotal) {
 function periodStart(period) { const date = new Date(); date.setHours(0, 0, 0, 0); date.setDate(date.getDate() - Number(period)); return date }
 function formatNumber(value, digits = 0) { return new Intl.NumberFormat('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(Number(value) || 0) }
 
-function QuantityDrawer({ drawerItem, onUpdateQuantity, onRemove, onClose }) {
+function TopQuantityBar({ drawerItem, onUpdateQuantity, onRemove, onClose }) {
   if (!drawerItem) return null
   const { itemId, name, variety, brand, category, unit, quantity, lastPurchasedQty } = drawerItem
   const isDecimalUnit = ['kg', 'g', 'L', 'ml'].includes(unit)
@@ -1403,97 +1416,96 @@ function QuantityDrawer({ drawerItem, onUpdateQuantity, onRemove, onClose }) {
   }
 
   return (
-    <aside className={`quantity-drawer category-${categoryKey(category)}`} aria-label="Ajustar quantidade do produto">
-      <div className="quantity-drawer-inner">
-        <div className="quantity-drawer-header">
-          <CategoryIcon category={category} size={20} />
-          <div className="quantity-drawer-info">
-            <div className="quantity-drawer-title">
-              <b>{name}</b>
-              {variantLabel && <span className="quantity-drawer-variant">{variantLabel}</span>}
-            </div>
-            <small className="quantity-drawer-meta">
-              {lastPurchasedQty != null ? (
-                <span className="last-purchase-tag">
-                  {isLastPurchase ? `Última compra: ${lastPurchasedQty} ${unit} (padrão aplicado)` : `Última compra: ${lastPurchasedQty} ${unit}`}
-                </span>
-              ) : (
-                <span className="new-item-tag">Primeira vez na lista</span>
-              )}
-            </small>
+    <div className={`top-quantity-bar category-${categoryKey(category)}`} aria-label="Ajustar quantidade do produto">
+      <div className="top-quantity-main">
+        <CategoryIcon category={category} size={18} />
+        <div className="top-quantity-info">
+          <div className="top-quantity-title">
+            <b>{name}</b>
+            {variantLabel && <span className="top-quantity-variant">{variantLabel}</span>}
           </div>
+          <small className="top-quantity-meta">
+            {lastPurchasedQty != null ? (
+              <span className="last-purchase-tag">
+                {isLastPurchase ? `Última: ${lastPurchasedQty} ${unit}` : `Última: ${lastPurchasedQty} ${unit}`}
+              </span>
+            ) : (
+              <span className="new-item-tag">1ª vez</span>
+            )}
+          </small>
+        </div>
+      </div>
+
+      <div className="top-quantity-actions">
+        <div className="top-quantity-stepper">
           <button
             type="button"
-            className="quantity-drawer-close"
-            aria-label="Fechar gaveta"
-            title="Fechar"
+            className="top-step-button"
+            aria-label="Diminuir quantidade"
             onPointerDown={(e) => e.preventDefault()}
-            onClick={onClose}
+            onClick={() => {
+              if (quantity <= step) {
+                onRemove(itemId)
+              } else {
+                change(-step)
+              }
+            }}
           >
-            <X size={18} />
+            {quantity <= step ? <Trash2 size={13} /> : <Minus size={14} />}
+          </button>
+          <span className="top-qty-value">
+            <strong>{formatNumber(quantity, isDecimalUnit && quantity % 1 !== 0 ? 1 : 0)}</strong>
+            <small>{unit}</small>
+          </span>
+          <button
+            type="button"
+            className="top-step-button"
+            aria-label="Aumentar quantidade"
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={() => change(step)}
+          >
+            <Plus size={14} />
           </button>
         </div>
 
-        <div className="quantity-drawer-controls">
-          <div className="quantity-drawer-stepper">
-            <button
-              type="button"
-              className="drawer-step-button"
-              aria-label="Diminuir quantidade"
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={() => {
-                if (quantity <= step) {
-                  onRemove(itemId)
-                } else {
-                  change(-step)
-                }
-              }}
-            >
-              {quantity <= step ? <Trash2 size={16} /> : <Minus size={18} />}
-            </button>
-            <span className="drawer-qty-value">
-              <strong>{formatNumber(quantity, isDecimalUnit && quantity % 1 !== 0 ? 1 : 0)}</strong>
-              <small>{unit}</small>
-            </span>
-            <button
-              type="button"
-              className="drawer-step-button"
-              aria-label="Aumentar quantidade"
-              onPointerDown={(e) => e.preventDefault()}
-              onClick={() => change(step)}
-            >
-              <Plus size={18} />
-            </button>
-          </div>
-
-          <div className="drawer-quick-actions">
-            {isDecimalUnit ? (
-              <>
-                <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(0.5)}>+0.5</button>
-                <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(1)}>+1</button>
-                <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(2)}>+2</button>
-              </>
-            ) : (
-              <>
-                <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(1)}>+1</button>
-                <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(2)}>+2</button>
-                <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(5)}>+5</button>
-              </>
-            )}
-            {lastPurchasedQty != null && Number(lastPurchasedQty) !== Number(quantity) && (
-              <button
-                type="button"
-                className="drawer-repeat-button"
-                onPointerDown={(e) => e.preventDefault()}
-                onClick={() => setFixed(Number(lastPurchasedQty))}
-              >
-                Última ({lastPurchasedQty})
-              </button>
-            )}
-          </div>
+        <div className="top-quick-buttons">
+          {isDecimalUnit ? (
+            <>
+              <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(0.5)}>+0.5</button>
+              <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(1)}>+1</button>
+            </>
+          ) : (
+            <>
+              <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(1)}>+1</button>
+              <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(2)}>+2</button>
+            </>
+          )}
         </div>
+
+        <button
+          type="button"
+          className="top-undo-button"
+          title="Remover produto da lista"
+          aria-label="Desfazer e remover da lista"
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => onRemove(itemId)}
+        >
+          <RotateCcw size={13} />
+          <span>Desfazer</span>
+        </button>
+
+        <button
+          type="button"
+          className="top-close-button"
+          aria-label="Fechar ajuste"
+          title="Fechar"
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={onClose}
+        >
+          <X size={15} />
+        </button>
       </div>
-    </aside>
+    </div>
   )
 }
 
