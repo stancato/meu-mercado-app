@@ -450,42 +450,17 @@ html[data-theme="light"]{
   font-weight: 700;
 }
 
-.top-quick-buttons {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.top-quick-buttons button {
-  height: 32px;
-  padding: 0 8px;
-  border-radius: 8px;
-  border: 1px solid color-mix(in srgb, var(--cat, #9c7cff) 30%, var(--line));
-  background: color-mix(in srgb, var(--cat, #9c7cff) 12%, #11152a);
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.top-quick-buttons button:hover {
-  border-color: var(--cat, #9c7cff);
-  background: color-mix(in srgb, var(--cat, #9c7cff) 25%, #11152a);
-}
-
 .top-undo-button {
+  width: 32px;
   height: 32px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 9px;
+  display: grid;
+  place-items: center;
   border-radius: 8px;
   border: 1px solid #ff746c44;
   background: #ff746c14;
   color: var(--danger);
-  font-size: 11px;
-  font-weight: 700;
   cursor: pointer;
+  padding: 0;
   transition: .15s;
 }
 
@@ -591,7 +566,7 @@ html[data-theme="light"]{
     gap: 6px;
   }
   .top-quantity-variant {
-    max-width: 80px;
+    max-width: 130px;
   }
   .results-grid {
     gap: 5px;
@@ -606,8 +581,5 @@ html[data-theme="light"] .top-quantity-bar {
   box-shadow: 0 4px 18px #05061514;
 }
 html[data-theme="light"] .top-quantity-stepper {
-  background: #fff;
-}
-html[data-theme="light"] .top-quick-buttons button {
   background: #fff;
 }

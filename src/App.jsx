@@ -1411,10 +1411,6 @@ function TopQuantityBar({ drawerItem, onUpdateQuantity, onRemove, onClose }) {
     onUpdateQuantity(itemId, next)
   }
 
-  const setFixed = (val) => {
-    onUpdateQuantity(itemId, Math.max(0.1, val))
-  }
-
   return (
     <div className={`top-quantity-bar category-${categoryKey(category)}`} aria-label="Ajustar quantidade do produto">
       <div className="top-quantity-main">
@@ -1468,20 +1464,6 @@ function TopQuantityBar({ drawerItem, onUpdateQuantity, onRemove, onClose }) {
           </button>
         </div>
 
-        <div className="top-quick-buttons">
-          {isDecimalUnit ? (
-            <>
-              <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(0.5)}>+0.5</button>
-              <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(1)}>+1</button>
-            </>
-          ) : (
-            <>
-              <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(1)}>+1</button>
-              <button type="button" onPointerDown={(e) => e.preventDefault()} onClick={() => change(2)}>+2</button>
-            </>
-          )}
-        </div>
-
         <button
           type="button"
           className="top-undo-button"
@@ -1490,8 +1472,7 @@ function TopQuantityBar({ drawerItem, onUpdateQuantity, onRemove, onClose }) {
           onPointerDown={(e) => e.preventDefault()}
           onClick={() => onRemove(itemId)}
         >
-          <RotateCcw size={13} />
-          <span>Desfazer</span>
+          <RotateCcw size={14} />
         </button>
 
         <button
