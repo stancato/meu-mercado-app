@@ -518,8 +518,7 @@ function InlineProductSearch({ products, list, state, onAdd, topBar = null }) {
 function SuggestionButton({ product, alreadyAdded = false, onAdd, variant = false }) {
   const selected = product.selectedVariant
   const variantLabel = variant ? [selected?.variety, selected?.brand].filter(Boolean).join(' · ') : null
-  const label = variantLabel ? `${product.name} · ${variantLabel}` : product.name
-  return <button className={`category-${categoryKey(product.category)} ${variant ? 'variant-result' : ''}`} role="option" aria-selected={alreadyAdded} disabled={alreadyAdded} onPointerDown={(event) => event.preventDefault()} onClick={() => onAdd(product)}><CategoryIcon category={product.category} size={18}/><span className="suggestion-text"><b>{label}</b></span>{alreadyAdded ? <span className="added-label"><Check size={14}/></span> : <Plus size={16} className="suggestion-add-icon"/>}</button>
+  return <button className={`category-${categoryKey(product.category)} ${variant ? 'variant-result' : ''}`} role="option" aria-selected={alreadyAdded} disabled={alreadyAdded} onPointerDown={(event) => event.preventDefault()} onClick={() => onAdd(product)}><CategoryIcon category={product.category} size={18}/><span className="suggestion-text"><b>{product.name}</b>{variantLabel && <small>{variantLabel}</small>}</span>{alreadyAdded ? <span className="added-label"><Check size={14}/></span> : <Plus size={16} className="suggestion-add-icon"/>}</button>
 }
 
 function ItemPanel({ item: initial, state, onClose, onSave, onDelete, onEditProduct }) {
