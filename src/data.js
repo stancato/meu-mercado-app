@@ -85,9 +85,239 @@ export function normalizedPrice(item) {
   return { value: Number(item.totalPrice) / (content.amount * quantity), unit: content.unit }
 }
 
+function stripJsonComments(source) {
+  let insideString = false
+  let stringChar = ''
+  let isEscaped = false
+  let result = ''
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i]
+    const next = source[i + 1]
+
+    if (insideString) {
+      result += char
+      if (isEscaped) {
+        isEscaped = false
+      } else if (char === '\\') {
+        isEscaped = true
+      } else if (char === stringChar) {
+        insideString = false
+      }
+      continue
+    }
+
+    if (char === '"' || char === "'") {
+      insideString = true
+      stringChar = char
+      result += char
+      continue
+    }
+
+    if (char === '/' && next === '/') {
+      while (i < source.length && source[i] !== '\n' && source[i] !== '\r') {
+        i++
+      }
+      result += '\n'
+      continue
+    }
+
+    if (char === '/' && next === '*') {
+      i += 2
+      while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) {
+        i++
+      }
+      i++
+      continue
+    }
+
+    result += char
+  }
+  return result
+}
+
+function normalizeJsonQuotes(source) {
+  let insideString = false
+  let stringChar = ''
+  let isEscaped = false
+  let result = ''
+
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i]
+
+    if (insideString) {
+      if (stringChar === "'") {
+        if (isEscaped) {
+          if (char === "'") {
+            result = result.slice(0, -1) + "'"
+          } else {
+            result += char
+          }
+          isEscaped = false
+        } else if (char === '\\') {
+          isEscaped = true
+          result += char
+        } else if (char === '"') {
+          result += '\\"'
+        } else if (char === "'") {
+          insideString = false
+          result += '"'
+        } else if (char === '\n') {
+          result += '\\n'
+        } else if (char === '\r') {
+          result += '\\r'
+        } else if (char === '\t') {
+          result += '\\t'
+        } else {
+          result += char
+        }
+      } else {
+        if (isEscaped) {
+          isEscaped = false
+          result += char
+        } else if (char === '\\') {
+          isEscaped = true
+          result += char
+        } else if (char === '"') {
+          insideString = false
+          result += '"'
+        } else if (char === '\n') {
+          result += '\\n'
+        } else if (char === '\r') {
+          result += '\\r'
+        } else if (char === '\t') {
+          result += '\\t'
+        } else {
+          result += char
+        }
+      }
+      continue
+    }
+
+    if (char === "'") {
+      insideString = true
+      stringChar = "'"
+      result += '"'
+      continue
+    } else if (char === '"') {
+      insideString = true
+      stringChar = '"'
+      result += '"'
+      continue
+    }
+
+    result += char
+  }
+  return result
+}
+
+function removeJsonTrailingCommas(source) {
+  let insideString = false
+  let isEscaped = false
+  let result = ''
+
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i]
+
+    if (insideString) {
+      result += char
+      if (isEscaped) {
+        isEscaped = false
+      } else if (char === '\\') {
+        isEscaped = true
+      } else if (char === '"') {
+        insideString = false
+      }
+      continue
+    }
+
+    if (char === '"') {
+      insideString = true
+      result += char
+      continue
+    }
+
+    if (char === ',') {
+      let nextIdx = i + 1
+      while (nextIdx < source.length && /\s/.test(source[nextIdx])) {
+        nextIdx++
+      }
+      if (nextIdx < source.length && (source[nextIdx] === '}' || source[nextIdx] === ']')) {
+        continue
+      }
+    }
+
+    result += char
+  }
+  return result
+}
+
+function quoteJsonKeys(source) {
+  return source.replace(/([{,]\s*)([a-zA-Z_$][a-zA-Z0-9_$]*)\s*:/g, '$1"$2":')
+}
+
+export function sanitizeJsonText(text) {
+  let str = text
+    .replace(/[\u201C\u201D\u201E\u201F\u00AB\u00BB\u2033\u2036]/g, '"')
+    .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'")
+
+  str = stripJsonComments(str)
+  str = quoteJsonKeys(str)
+  str = normalizeJsonQuotes(str)
+  str = removeJsonTrailingCommas(str)
+  return str
+}
+
 export function parseJsonInput(text) {
-  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
-  return JSON.parse(cleaned)
+  if (typeof text !== 'string') {
+    throw new Error('O conteúdo fornecido não é um texto válido.')
+  }
+
+  let cleaned = text
+    .replace(/[\uFEFF\u200B-\u200D\u200E\u200F\u2028\u2029]/g, '')
+    .replace(/[\u00A0\u202F\u2000-\u200A]/g, ' ')
+    .trim()
+
+  if (!cleaned) {
+    throw new Error('Nenhum conteúdo informado para importação.')
+  }
+
+  const codeBlockMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
+  if (codeBlockMatch) {
+    cleaned = codeBlockMatch[1].trim()
+  } else {
+    const firstBrace = cleaned.indexOf('{')
+    const firstBracket = cleaned.indexOf('[')
+    let startIdx = -1
+    if (firstBrace !== -1 && firstBracket !== -1) {
+      startIdx = Math.min(firstBrace, firstBracket)
+    } else if (firstBrace !== -1) {
+      startIdx = firstBrace
+    } else if (firstBracket !== -1) {
+      startIdx = firstBracket
+    }
+
+    const lastBrace = cleaned.lastIndexOf('}')
+    const lastBracket = cleaned.lastIndexOf(']')
+    const endIdx = Math.max(lastBrace, lastBracket)
+
+    if (startIdx !== -1 && endIdx > startIdx) {
+      cleaned = cleaned.slice(startIdx, endIdx + 1).trim()
+    }
+  }
+
+  try {
+    return JSON.parse(cleaned)
+  } catch {
+    // Continue with sanitization
+  }
+
+  const sanitized = sanitizeJsonText(cleaned)
+
+  try {
+    return JSON.parse(sanitized)
+  } catch (err) {
+    throw new Error(`Erro ao interpretar o JSON: verifique a formatação do texto colado (${err.message})`)
+  }
 }
 
 const pick = (object, keys, fallback = '') => keys.find((key) => object?.[key] !== undefined) ? object[keys.find((key) => object?.[key] !== undefined)] : fallback
@@ -192,3 +422,49 @@ Regras:
 - precoTotal é o valor efetivamente cobrado pelo item após descontos identificáveis.
 - Preserve todos os itens, inclusive itens repetidos.
 - Confira se a soma dos preços totais dos itens é compatível com valorTotal; não altere dados legíveis apenas para forçar a soma.`
+
+export function normalizeProductVariants(variants = []) {
+  return (variants || []).map((variant) => {
+    if (typeof variant === 'object' && variant) {
+      const normalized = { packageSize: 1, packageUnit: 'un', variety: '', brand: '', barcode: '', ...variant, id: variant.id || uid() }
+      if (!normalized.variety && normalized.flavor) normalized.variety = normalized.flavor
+      return normalized
+    }
+    const [brand = '', packageSize = '1', packageUnit = 'un'] = String(variant || '').split('|')
+    return { id: uid(), variety: '', brand, packageSize: Number(packageSize) || 1, packageUnit: packageUnit || 'un', barcode: '', createdAt: nowIso() }
+  })
+}
+
+export function buildReceiptPrompt(products = [], options = {}) {
+  const { includeCatalog = true } = options
+  let prompt = RECEIPT_PROMPT
+
+  if (includeCatalog && Array.isArray(products) && products.length > 0) {
+    const catalog = products
+      .map((p) => {
+        const variants = normalizeProductVariants(p.variants || [])
+        const varieties = [...new Set(variants.map((v) => (v.variety || '').trim()).filter(Boolean))]
+        const brands = [...new Set([
+          ...(p.brands || []).map((b) => String(b || '').trim()),
+          ...variants.map((v) => (v.brand || '').trim()),
+        ].filter(Boolean))]
+
+        const entry = {
+          produto: p.name,
+          categoria: p.category || 'Outros',
+        }
+        if (varieties.length > 0) entry.variedades = varieties
+        if (brands.length > 0) entry.marcas = brands
+        return entry
+      })
+      .filter((p) => Boolean(p.produto && p.produto.trim()))
+      .sort((a, b) => a.produto.localeCompare(b.produto, 'pt-BR'))
+
+    if (catalog.length > 0) {
+      prompt += `\n\n---\nCatálogo de produtos e variações já existentes:\nSempre que um item da nota corresponder a um produto ou variedade abaixo, use EXATAMENTE a mesma grafia para os campos "produto", "variedade", "marca" e "categoria" para manter o catálogo padronizado. Caso o item não exista nesta lista, crie um novo nome legível e padronizado.\n\n\`\`\`json\n${JSON.stringify(catalog, null, 2)}\n\`\`\``
+    }
+  }
+
+  return prompt
+}
+
