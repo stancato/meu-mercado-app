@@ -468,3 +468,476 @@ export function buildReceiptPrompt(products = [], options = {}) {
   return prompt
 }
 
+export function variantMatchesItem(variant, item) {
+  return (
+    normalizeText(variant.variety) === normalizeText(item.variety) &&
+    normalizeText(variant.brand) === normalizeText(item.brand) &&
+    Number(variant.packageSize || 1) === Number(item.packageSize || 1) &&
+    (variant.packageUnit || 'un') === (item.packageUnit || 'un')
+  )
+}
+
+export function itemBelongsToProduct(state, item, product) {
+  if (item.productId === product.id) return true
+  const hasValidProductId = item.productId && state.products.some((saved) => saved.id === item.productId)
+  const names = new Set([product.name, ...(product.aliases || [])].map(normalizeText).filter(Boolean))
+  return !hasValidProductId && names.has(normalizeText(item.productName || item.name))
+}
+
+export function refreshPurchaseMetadata(state) {
+  const purchases = [...state.purchases].sort(
+    (first, second) => new Date(second.purchasedAt || 0) - new Date(first.purchasedAt || 0)
+  )
+  const products = state.products.map((product) => {
+    const variants = normalizeProductVariants(product.variants).map((variant) => {
+      let latest = null
+      for (const purchase of purchases) {
+        const item = purchase.items.find(
+          (saved) =>
+            saved.variantId === variant.id ||
+            (saved.productId === product.id && variantMatchesItem(variant, saved))
+        )
+        if (item) {
+          latest = { purchase, item }
+          break
+        }
+      }
+      if (!latest) {
+        const { lastPrice: _lastPrice, lastPurchasedAt: _lastPurchasedAt, lastMarketName: _lastMarketName, ...withoutHistory } = variant
+        return withoutHistory
+      }
+      return {
+        ...variant,
+        lastPrice:
+          Number(latest.item.unitPrice) ||
+          Number(latest.item.totalPrice) / (Number(latest.item.quantity) || 1),
+        lastPurchasedAt: latest.purchase.purchasedAt,
+        lastMarketName: latest.purchase.marketName,
+      }
+    })
+    return {
+      ...product,
+      variants,
+      brands: [...new Set(variants.map((variant) => variant.brand).filter(Boolean))],
+    }
+  })
+  return { ...state, products }
+}
+
+export function suggestNewProductName(productName = '', variant = {}) {
+  const variety = String(variant?.variety || '').trim()
+  const pName = String(productName || '').trim()
+  if (!variety) return pName ? `${pName} (${variant?.brand || 'Novo'})` : 'Novo produto'
+  const normP = normalizeText(pName)
+  const normV = normalizeText(variety)
+  if (normP.includes(normV)) return pName
+  if (normV.startsWith(normP)) return variety
+  return `${pName} ${variety}`
+}
+
+export function mergeProductVariants(state, plan) {
+  const product = state.products.find((p) => p.id === plan.productId)
+  if (!product) return state
+  const variants = normalizeProductVariants(product.variants)
+  const sourceVariant = variants.find((v) => v.id === plan.sourceVariantId)
+  const targetVariant = variants.find((v) => v.id === plan.targetVariantId)
+  if (!sourceVariant || !targetVariant || sourceVariant.id === targetVariant.id) return state
+
+  const updatedTargetVariant = {
+    ...targetVariant,
+    ...(plan.targetOverrides || {}),
+    variety: (plan.targetOverrides?.variety !== undefined ? plan.targetOverrides.variety : targetVariant.variety || '').trim(),
+    brand: (plan.targetOverrides?.brand !== undefined ? plan.targetOverrides.brand : targetVariant.brand || '').trim(),
+    packageSize: Math.max(0.001, Number(plan.targetOverrides?.packageSize ?? targetVariant.packageSize) || 1),
+    packageUnit: plan.targetOverrides?.packageUnit || targetVariant.packageUnit || 'un',
+    barcode: (plan.targetOverrides?.barcode !== undefined ? plan.targetOverrides.barcode : targetVariant.barcode || '').trim(),
+    updatedAt: nowIso(),
+  }
+
+  const updatedVariants = variants
+    .filter((v) => v.id !== sourceVariant.id)
+    .map((v) => (v.id === targetVariant.id ? updatedTargetVariant : v))
+
+  const updatedProduct = {
+    ...product,
+    variants: updatedVariants,
+    brands: [...new Set(updatedVariants.map((v) => v.brand).filter(Boolean))],
+    updatedAt: nowIso(),
+  }
+
+  const isSourceItem = (item) => {
+    if (!itemBelongsToProduct(state, item, product)) return false
+    return item.variantId === sourceVariant.id || (!item.variantId && variantMatchesItem(sourceVariant, item))
+  }
+
+  const redirectPurchaseItem = (item) => {
+    if (!isSourceItem(item)) {
+      if (
+        itemBelongsToProduct(state, item, product) &&
+        (item.variantId === targetVariant.id || (!item.variantId && variantMatchesItem(targetVariant, item)))
+      ) {
+        return {
+          ...item,
+          variantId: updatedTargetVariant.id,
+          variety: updatedTargetVariant.variety,
+          brand: updatedTargetVariant.brand || item.brand,
+          packageSize: updatedTargetVariant.packageSize,
+          packageUnit: updatedTargetVariant.packageUnit,
+        }
+      }
+      return item
+    }
+    return {
+      ...item,
+      variantId: updatedTargetVariant.id,
+      variety: updatedTargetVariant.variety,
+      brand: updatedTargetVariant.brand || item.brand,
+      packageSize: updatedTargetVariant.packageSize,
+      packageUnit: updatedTargetVariant.packageUnit,
+    }
+  }
+
+  const redirectListItem = (item) => {
+    if (!isSourceItem(item)) {
+      if (
+        itemBelongsToProduct(state, item, product) &&
+        (item.variantId === targetVariant.id || (!item.variantId && variantMatchesItem(targetVariant, item)))
+      ) {
+        return {
+          ...item,
+          variantId: updatedTargetVariant.id,
+          variety: updatedTargetVariant.variety,
+          brand: updatedTargetVariant.brand || item.brand,
+          packageSize: updatedTargetVariant.packageSize,
+          packageUnit: updatedTargetVariant.packageUnit,
+        }
+      }
+      return item
+    }
+    return {
+      ...item,
+      variantId: updatedTargetVariant.id,
+      variety: updatedTargetVariant.variety,
+      brand: updatedTargetVariant.brand || item.brand,
+      packageSize: updatedTargetVariant.packageSize,
+      packageUnit: updatedTargetVariant.packageUnit,
+    }
+  }
+
+  const updatedPurchases = state.purchases.map((purchase) => ({
+    ...purchase,
+    items: purchase.items.map(redirectPurchaseItem),
+  }))
+
+  const updatedLists = state.lists.map((list) => ({
+    ...list,
+    items: list.items.map(redirectListItem),
+  }))
+
+  const updatedMappings = (state.productMappings || []).map((mapping) => {
+    if (mapping.productId === product.id && mapping.variantId === sourceVariant.id) {
+      return { ...mapping, variantId: updatedTargetVariant.id, updatedAt: nowIso() }
+    }
+    return mapping
+  })
+
+  const updatedProducts = state.products.map((p) => (p.id === product.id ? updatedProduct : p))
+
+  return refreshPurchaseMetadata({
+    ...state,
+    products: updatedProducts,
+    purchases: updatedPurchases,
+    lists: updatedLists,
+    productMappings: updatedMappings,
+  })
+}
+
+export function promoteVariantToProduct(state, plan) {
+  const sourceProduct = state.products.find((p) => p.id === plan.sourceProductId)
+  if (!sourceProduct) return state
+  const variants = normalizeProductVariants(sourceProduct.variants)
+  const variant = variants.find((v) => v.id === plan.variantId)
+  if (!variant) return state
+
+  const newProductId = uid()
+  const newVariantId = uid()
+  const newVariant = {
+    ...variant,
+    id: newVariantId,
+    variety: (plan.newProduct.variantVariety !== undefined ? plan.newProduct.variantVariety : '').trim(),
+    updatedAt: nowIso(),
+  }
+
+  const createdProduct = {
+    id: newProductId,
+    name: plan.newProduct.name.trim(),
+    category: plan.newProduct.category || sourceProduct.category || 'Outros',
+    defaultUnit: plan.newProduct.defaultUnit || variant.packageUnit || sourceProduct.defaultUnit || 'un',
+    brands: [newVariant.brand].filter(Boolean),
+    variants: [newVariant],
+    recurrenceDays: null,
+    aliases: [],
+    archivedAt: null,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  }
+
+  const remainingVariants = variants.filter((v) => v.id !== variant.id)
+  const updatedSourceProduct = {
+    ...sourceProduct,
+    variants: remainingVariants,
+    brands: [...new Set(remainingVariants.map((v) => v.brand).filter(Boolean))],
+    updatedAt: nowIso(),
+  }
+
+  const isTargetItem = (item) => {
+    if (!itemBelongsToProduct(state, item, sourceProduct)) return false
+    return item.variantId === variant.id || (!item.variantId && variantMatchesItem(variant, item))
+  }
+
+  const redirectPurchaseItem = (item) => {
+    if (!isTargetItem(item)) return item
+    return {
+      ...item,
+      productId: createdProduct.id,
+      productName: createdProduct.name,
+      category: createdProduct.category,
+      variantId: newVariant.id,
+      variety: newVariant.variety,
+    }
+  }
+
+  const redirectListItem = (item) => {
+    if (!isTargetItem(item)) return item
+    return {
+      ...item,
+      productId: createdProduct.id,
+      name: createdProduct.name,
+      category: createdProduct.category,
+      unit: createdProduct.defaultUnit || item.unit,
+      variantId: newVariant.id,
+      variety: newVariant.variety,
+    }
+  }
+
+  const updatedPurchases = state.purchases.map((purchase) => ({
+    ...purchase,
+    items: purchase.items.map(redirectPurchaseItem),
+  }))
+
+  const updatedLists = state.lists.map((list) => ({
+    ...list,
+    items: list.items.map(redirectListItem),
+  }))
+
+  const updatedMappings = (state.productMappings || []).map((mapping) => {
+    if (mapping.productId === sourceProduct.id && mapping.variantId === variant.id) {
+      return { ...mapping, productId: createdProduct.id, variantId: newVariant.id, updatedAt: nowIso() }
+    }
+    return mapping
+  })
+
+  const updatedProducts = state.products
+    .map((p) => (p.id === sourceProduct.id ? updatedSourceProduct : p))
+    .concat(createdProduct)
+
+  return refreshPurchaseMetadata({
+    ...state,
+    products: updatedProducts,
+    purchases: updatedPurchases,
+    lists: updatedLists,
+    productMappings: updatedMappings,
+  })
+}
+
+export function updatePurchaseItem(state, payload) {
+  const { purchaseId, itemId, targetProductId, targetVariantId, itemData = {}, createVariantInProduct = true } = payload
+  const purchase = state.purchases.find((p) => p.id === purchaseId)
+  if (!purchase) return state
+
+  const oldItem = purchase.items.find((item) => item.id === itemId)
+  if (!oldItem) return state
+
+  const quantity = Math.max(0.001, Number(itemData.quantity) || 1)
+  const packageSize = Math.max(0.001, Number(itemData.packageSize) || 1)
+  const packageUnit = itemData.packageUnit || 'un'
+  const unitPrice = Number(itemData.unitPrice) || (Number(itemData.totalPrice) / quantity) || 0
+  const totalPrice = Number(itemData.totalPrice) != null && !Number.isNaN(Number(itemData.totalPrice))
+    ? Number(itemData.totalPrice)
+    : unitPrice * quantity
+  const variety = (itemData.variety || '').trim()
+  const brand = (itemData.brand || '').trim()
+  const category = itemData.category || oldItem.category || 'Outros'
+  const barcode = (itemData.barcode || '').trim()
+  const productName = (itemData.productName || oldItem.productName || '').trim()
+
+  let updatedProducts = state.products
+  let finalProductId = ''
+  let finalProductName = productName
+  let finalCategory = category
+  let finalVariantId = ''
+
+  if (targetProductId === 'new') {
+    finalProductId = uid()
+    finalVariantId = uid()
+    const newVariant = {
+      id: finalVariantId,
+      variety,
+      brand,
+      packageSize,
+      packageUnit,
+      barcode,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    }
+    const newProduct = {
+      id: finalProductId,
+      name: productName || 'Novo produto',
+      category,
+      defaultUnit: defaultUnitForProduct(productName, category),
+      brands: [brand].filter(Boolean),
+      variants: [newVariant],
+      recurrenceDays: null,
+      aliases: [],
+      archivedAt: null,
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    }
+    updatedProducts = [...state.products, newProduct]
+    finalProductName = newProduct.name
+    finalCategory = newProduct.category
+  } else {
+    let targetProduct = state.products.find((p) => p.id === targetProductId)
+    if (!targetProduct && productName) {
+      targetProduct = state.products.find((p) => normalizeText(p.name) === normalizeText(productName))
+    }
+
+    if (targetProduct) {
+      finalProductId = targetProduct.id
+      finalProductName = targetProduct.name
+      finalCategory = targetProduct.category || category
+      const variants = normalizeProductVariants(targetProduct.variants)
+
+      if (targetVariantId && targetVariantId !== 'new') {
+        const foundVariant = variants.find((v) => v.id === targetVariantId)
+        if (foundVariant) {
+          finalVariantId = foundVariant.id
+        }
+      }
+
+      if (!finalVariantId) {
+        const existingMatch = variants.find((v) =>
+          variantMatchesItem(v, { variety, brand, packageSize, packageUnit })
+        )
+        if (existingMatch) {
+          finalVariantId = existingMatch.id
+        } else if (createVariantInProduct) {
+          const newVariant = {
+            id: uid(),
+            variety,
+            brand,
+            packageSize,
+            packageUnit,
+            barcode,
+            createdAt: nowIso(),
+            updatedAt: nowIso(),
+          }
+          const updatedVariants = [...variants, newVariant]
+          const updatedProduct = {
+            ...targetProduct,
+            variants: updatedVariants,
+            brands: [...new Set(updatedVariants.map((v) => v.brand).filter(Boolean))],
+            updatedAt: nowIso(),
+          }
+          updatedProducts = state.products.map((p) => (p.id === targetProduct.id ? updatedProduct : p))
+          finalVariantId = newVariant.id
+        }
+      }
+    } else {
+      finalProductId = uid()
+      finalVariantId = uid()
+      const newVariant = {
+        id: finalVariantId,
+        variety,
+        brand,
+        packageSize,
+        packageUnit,
+        barcode,
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      }
+      const newProduct = {
+        id: finalProductId,
+        name: productName || 'Novo produto',
+        category,
+        defaultUnit: defaultUnitForProduct(productName, category),
+        brands: [brand].filter(Boolean),
+        variants: [newVariant],
+        recurrenceDays: null,
+        aliases: [],
+        archivedAt: null,
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      }
+      updatedProducts = [...state.products, newProduct]
+      finalProductName = newProduct.name
+      finalCategory = newProduct.category
+    }
+  }
+
+  const updatedItem = {
+    ...oldItem,
+    productId: finalProductId,
+    productName: finalProductName,
+    category: finalCategory,
+    variantId: finalVariantId || '',
+    variety,
+    brand,
+    packageSize,
+    packageUnit,
+    quantity,
+    unitPrice,
+    totalPrice,
+    barcode,
+  }
+
+  const updatedPurchases = state.purchases.map((p) => {
+    if (p.id !== purchaseId) return p
+    const updatedItems = p.items.map((item) => (item.id === itemId ? updatedItem : item))
+    const updatedTotal = updatedItems.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0)
+    return { ...p, items: updatedItems, total: updatedTotal }
+  })
+
+  const originalKey = oldItem.originalDescription || oldItem.importedProductName
+  let updatedMappings = state.productMappings || []
+  if (originalKey) {
+    const normOriginal = normalizeText(originalKey)
+    const existingIndex = updatedMappings.findIndex(
+      (m) => normalizeText(m.importedDescription || m.description || '') === normOriginal
+    )
+    const newMapping = {
+      id: existingIndex >= 0 ? updatedMappings[existingIndex].id : uid(),
+      importedDescription: originalKey,
+      productId: finalProductId,
+      variantId: finalVariantId || '',
+      productName: finalProductName,
+      category: finalCategory,
+      updatedAt: nowIso(),
+    }
+    if (existingIndex >= 0) {
+      updatedMappings = updatedMappings.map((m, idx) => (idx === existingIndex ? newMapping : m))
+    } else {
+      updatedMappings = [newMapping, ...updatedMappings]
+    }
+  }
+
+  return refreshPurchaseMetadata({
+    ...state,
+    products: updatedProducts,
+    purchases: updatedPurchases,
+    productMappings: updatedMappings,
+  })
+}
+
+
+

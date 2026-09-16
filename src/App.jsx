@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Apple, Archive, ArrowLeftRight, BarChart3, Bath, Beef, CalendarClock, Check, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, Eye, EyeOff, GitMerge, LayoutGrid, List, ListChecks, LogIn, LogOut, Milk, Minus, Moon, Package, PackageCheck, PackagePlus, PackageSearch, Pencil, Plus, ReceiptText, RotateCcw, Search, Settings, Share2, ShoppingBasket, SprayCan, Store, Sun, Tags, Trash2, TrendingUp, X } from 'lucide-react'
 import { signOut } from 'firebase/auth'
 import { auth, firebaseReady, loginWithGoogle } from './firebase'
-import { CATEGORIES, RECEIPT_PROMPT, UNITS, buildReceiptPrompt, dateTimeLocal, defaultUnitForProduct, money, normalizeImport, normalizeProductVariants, normalizeText, normalizedPrice, nowIso, onlyDigits, parseJsonInput, shortDate, uid } from './data'
+import { CATEGORIES, RECEIPT_PROMPT, UNITS, buildReceiptPrompt, dateTimeLocal, defaultUnitForProduct, mergeProductVariants, money, normalizeImport, normalizeProductVariants, normalizeText, normalizedPrice, nowIso, onlyDigits, parseJsonInput, promoteVariantToProduct, shortDate, suggestNewProductName, uid, updatePurchaseItem } from './data'
 import { Empty, Field, Modal, Toast } from './components'
 import { useStore } from './store'
 
@@ -86,7 +86,7 @@ export default function App({ user }) {
 
     <nav className="bottom-nav">{NAV.map(([id, label, Icon]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}><span className="nav-icon"><Icon size={21}/>{id === 'lists' && pendingListCount > 0 && <span className="nav-badge" aria-label={`${pendingListCount} itens para comprar`}>{pendingListCount > 99 ? '99+' : pendingListCount}</span>}</span><span>{label}</span></button>)}</nav>
 
-    {modal?.type === 'item' && <ItemPanel item={modal.item} state={state} onClose={() => setModal(null)} onEditProduct={(product) => setModal({ type: 'product', product })} onDelete={() => {
+    {modal?.type === 'item' && <ItemPanel item={modal.item} state={state} onClose={() => setModal(null)} onOpenModal={setModal} onEditProduct={(product) => setModal({ type: 'product', product })} onDelete={() => {
       mutate((s) => ({ ...s, lists: s.lists.map((list) => ({ ...list, items: list.items.filter((item) => item.id !== modal.item.id) })) }))
       setModal(null); setToast('Item removido da lista.')
     }} onSave={(item) => {
@@ -96,17 +96,36 @@ export default function App({ user }) {
       }))
       setModal(null); setToast('Item atualizado nesta lista.')
     }} />}
-    {modal?.type === 'product' && <ProductPanel product={modal.product} initialVariantId={modal.initialVariantId} state={state} onClose={() => setModal(null)} onSave={(product) => {
+    {modal?.type === 'product' && <ProductPanel product={state.products.find((p) => p.id === modal.product.id) || modal.product} initialVariantId={modal.initialVariantId} state={state} onClose={() => setModal(null)} onOpenModal={setModal} onSave={(product) => {
       mutate((current) => updateCatalogProduct(current, modal.product, product))
       setModal(null); setToast('Produto atualizado no catálogo.')
     }} />}
-    {modal?.type === 'product-detail' && <ProductDetailPanel product={modal.product} state={state} onClose={() => setModal(null)} onEdit={(opts) => setModal({ type: 'product', product: modal.product, ...opts })} />}
+    {modal?.type === 'product-detail' && <ProductDetailPanel product={state.products.find((p) => p.id === modal.product.id) || modal.product} state={state} onClose={() => setModal(null)} onEdit={(opts) => setModal({ type: 'product', product: modal.product, ...opts })} onOpenModal={setModal} />}
     {modal?.type === 'merge-products' && <ProductMergeModal initialLeft={modal.products[0]} initialRight={modal.products[1]} onClose={() => setModal(null)} onMerge={(plan) => { mutate((current) => mergeCatalogProducts(current, plan)); setModal(null); setToast('Produtos normalizados e histórico atualizado.') }} />}
+    {modal?.type === 'merge-variants' && <VariantMergeModal product={state.products.find((p) => p.id === modal.product.id) || modal.product} initialSourceVariant={modal.variant} state={state} onClose={() => setModal(null)} onMerge={(plan) => { mutate((current) => mergeProductVariants(current, plan)); setModal(null); setToast('Variações unificadas e histórico atualizado.') }} />}
+    {modal?.type === 'variant-to-product' && <VariantToProductModal product={state.products.find((p) => p.id === modal.product.id) || modal.product} variant={modal.variant} state={state} onClose={() => setModal(null)} onPromote={(plan) => { mutate((current) => promoteVariantToProduct(current, plan)); setModal(null); setToast('Variação transformada em produto com sucesso.') }} />}
     {modal?.type === 'import' && <ImportModal products={state.products} toast={setToast} onClose={() => setModal(null)} onReview={(draft) => setModal({ type: 'review', draft: prepareDraftProductMatches({ ...draft, source: 'json' }, state.products, state.productMappings) })} onOpenPrompt={() => setModal({ type: 'prompt', initialWithCatalog: true })} />}
     {modal?.type === 'manual' && <ManualPurchaseModal markets={state.markets} onClose={() => setModal(null)} onReview={(draft) => setModal({ type: 'review', draft: prepareDraftProductMatches({ ...draft, source: 'manual' }, state.products, state.productMappings) })} />}
     {modal?.type === 'review' && <ReviewModal draft={modal.draft} products={state.products} onClose={() => setModal(null)} onSave={finishPurchase} />}
-    {modal?.type === 'purchase-detail' && <PurchaseDetail purchase={modal.purchase} market={state.markets.find((market) => market.id === modal.purchase.marketId)} onClose={() => setModal(null)} onEdit={() => setModal({ type: 'edit-purchase', purchase: modal.purchase, market: state.markets.find((market) => market.id === modal.purchase.marketId) })} onDelete={() => setModal({ type: 'delete-purchase', purchase: modal.purchase })} />}
-    {modal?.type === 'edit-purchase' && <EditPurchaseModal purchase={modal.purchase} market={modal.market} onClose={() => setModal(null)} onSave={({ market, purchasedAt }) => { mutate((current) => updatePurchaseDetails(current, modal.purchase, market, purchasedAt)); setModal(null); setToast('Compra atualizada e histórico recalculado.') }} />}
+    {modal?.type === 'purchase-detail' && <PurchaseDetail purchase={state.purchases.find((p) => p.id === modal.purchase.id) || modal.purchase} market={state.markets.find((market) => market.id === modal.purchase.marketId)} onClose={() => setModal(modal.backModal || null)} onBack={modal.backModal ? () => setModal(modal.backModal) : null} onEdit={() => setModal({ type: 'edit-purchase', purchase: modal.purchase, market: state.markets.find((market) => market.id === modal.purchase.marketId), backModal: modal.backModal })} onEditItem={(item) => setModal({ type: 'edit-purchase-item', purchase: modal.purchase, item, backModal: { type: 'purchase-detail', purchase: modal.purchase, backModal: modal.backModal } })} onDelete={() => setModal({ type: 'delete-purchase', purchase: modal.purchase })} />}
+    {modal?.type === 'edit-purchase' && <EditPurchaseModal purchase={modal.purchase} market={modal.market} onClose={() => setModal(modal.backModal || null)} onSave={({ market, purchasedAt }) => { mutate((current) => updatePurchaseDetails(current, modal.purchase, market, purchasedAt)); setModal(modal.backModal || null); setToast('Compra atualizada e histórico recalculado.') }} />}
+    {modal?.type === 'edit-purchase-item' && <EditPurchaseItemModal purchase={state.purchases.find((p) => p.id === modal.purchase.id) || modal.purchase} item={modal.item} state={state} onClose={() => setModal(modal.backModal || null)} onBack={modal.backModal ? () => setModal(modal.backModal) : null} onSave={(payload) => {
+      mutate((current) => updatePurchaseItem(current, payload))
+      if (modal.backModal) {
+        if (modal.backModal.type === 'product-detail') {
+          const prod = state.products.find((p) => p.id === modal.backModal.product.id) || modal.backModal.product
+          setModal({ type: 'product-detail', product: prod })
+        } else if (modal.backModal.type === 'purchase-detail') {
+          const purch = state.purchases.find((p) => p.id === modal.purchase.id) || modal.purchase
+          setModal({ type: 'purchase-detail', purchase: purch, backModal: modal.backModal.backModal })
+        } else {
+          setModal(modal.backModal)
+        }
+      } else {
+        setModal(null)
+      }
+      setToast('Item da compra atualizado e catálogo sincronizado.')
+    }} />}
     {modal?.type === 'delete-purchase' && <DeletePurchaseModal purchase={modal.purchase} onClose={() => setModal({ type: 'purchase-detail', purchase: modal.purchase })} onConfirm={() => { mutate((current) => removePurchase(current, modal.purchase.id)); setModal(null); setToast('Compra removida e histórico atualizado.') }} />}
     {modal?.type === 'share-list' && <ShareListModal list={state.lists[0]} onClose={() => setModal(null)} toast={setToast} />}
     {modal?.type === 'prompt' && <PromptModal products={state.products} initialWithCatalog={modal.initialWithCatalog ?? true} onClose={() => setModal(null)} toast={setToast} />}
@@ -518,10 +537,11 @@ function InlineProductSearch({ products, list, state, onAdd, topBar = null }) {
 function SuggestionButton({ product, alreadyAdded = false, onAdd, variant = false }) {
   const selected = product.selectedVariant
   const variantLabel = variant ? [selected?.variety, selected?.brand].filter(Boolean).join(' · ') : null
-  return <button className={`category-${categoryKey(product.category)} ${variant ? 'variant-result' : ''}`} role="option" aria-selected={alreadyAdded} disabled={alreadyAdded} onPointerDown={(event) => event.preventDefault()} onClick={() => onAdd(product)}><CategoryIcon category={product.category} size={18}/><span className="suggestion-text"><b>{product.name}</b>{variantLabel && <small>{variantLabel}</small>}</span>{alreadyAdded ? <span className="added-label"><Check size={14}/></span> : <Plus size={16} className="suggestion-add-icon"/>}</button>
+  const label = variantLabel ? `${product.name} · ${variantLabel}` : product.name
+  return <button className={`category-${categoryKey(product.category)} ${variant ? 'variant-result' : ''}`} role="option" aria-selected={alreadyAdded} disabled={alreadyAdded} onPointerDown={(event) => event.preventDefault()} onClick={() => onAdd(product)}><CategoryIcon category={product.category} size={18}/><span className="suggestion-text"><b>{label}</b></span>{alreadyAdded ? <span className="added-label"><Check size={14}/></span> : <Plus size={16} className="suggestion-add-icon"/>}</button>
 }
 
-function ItemPanel({ item: initial, state, onClose, onSave, onDelete, onEditProduct }) {
+function ItemPanel({ item: initial, state, onClose, onSave, onDelete, onEditProduct, onOpenModal }) {
   const [item, setItem] = useState(initial)
   const [showPriceHistory, setShowPriceHistory] = useState(false)
   const [historyFilter, setHistoryFilter] = useState('all')
@@ -544,7 +564,7 @@ function ItemPanel({ item: initial, state, onClose, onSave, onDelete, onEditProd
     event.preventDefault()
     onSave({ ...item, quantity: Math.max(0.1, Number(item.quantity) || 1), note: (item.note || '').trim() })
   }
-  if (showPriceHistory) return <PriceHistoryPanel productName={item.name} entries={priceHistory} filter={historyFilter} selectedVarietyLabel={item.variety} onFilterChange={setHistoryFilter} onBack={() => setShowPriceHistory(false)} onClose={onClose}/>
+  if (showPriceHistory) return <PriceHistoryPanel productName={item.name} entries={priceHistory} filter={historyFilter} selectedVarietyLabel={item.variety} onFilterChange={setHistoryFilter} onBack={() => setShowPriceHistory(false)} onClose={onClose} onOpenModal={onOpenModal} listItem={initial}/>
   return <Modal title="Editar item da lista" subtitle="Quantidade e nota valem somente para esta lista." onClose={onClose}>
     <form onSubmit={submit}>
       <div className={`list-item-edit-heading category-${categoryKey(item.category)}`}><CategoryIcon category={item.category}/><div><b>{item.name}</b><small>{item.category} · {item.unit}</small></div></div>
@@ -562,17 +582,25 @@ function ItemPanel({ item: initial, state, onClose, onSave, onDelete, onEditProd
   </Modal>
 }
 
-function PriceHistoryPanel({ productName, entries, filter, selectedVarietyLabel, onFilterChange, onBack, onClose }) {
+function PriceHistoryPanel({ productName, entries, filter, selectedVarietyLabel, onFilterChange, onBack, onClose, onOpenModal, listItem }) {
   const varietyMap = new Map(entries.map((entry) => [entry.varietyKey, entry.item.variety || 'Sem variedade']))
   if (filter !== 'all' && !varietyMap.has(filter)) varietyMap.set(filter, selectedVarietyLabel || 'Sem variedade')
   const varieties = [...varietyMap.entries()]
   const filteredEntries = filter === 'all' ? entries : entries.filter((entry) => entry.varietyKey === filter)
   const average = filteredEntries.length ? filteredEntries.reduce((sum, entry) => sum + entry.unitPrice, 0) / filteredEntries.length : 0
-  return <Modal title={`Preços de ${productName}`} subtitle="Média e compras registradas para este produto." onClose={onClose}>
+  return <Modal title={`Preços de ${productName}`} subtitle="Média e compras registradas para este produto." onClose={onClose} wide>
     <button type="button" className="ghost price-history-back" onClick={onBack}><ChevronRight size={17}/> Voltar para a edição</button>
     <Field label="Filtrar por variedade"><select value={filter} onChange={(event) => onFilterChange(event.target.value)}><option value="all">Todas as variedades</option>{varieties.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field>
     <div className="price-history-summary"><div><small>Preço médio</small><strong>{filteredEntries.length ? money(average) : '—'}</strong><span>por item comprado</span></div><div><small>Registros</small><strong>{filteredEntries.length}</strong><span>{filteredEntries.length === 1 ? 'compra' : 'compras'}</span></div></div>
-    {filteredEntries.length ? <div className="item-price-history-list">{filteredEntries.map((entry) => <article key={`${entry.purchase.id}-${entry.item.id}`}><span className="price-history-date"><b>{shortDate(entry.purchase.purchasedAt)}</b><small>{entry.purchase.marketName}</small></span><span className="price-history-variant"><b>{entry.item.variety || 'Sem variedade'}</b><small>{[entry.item.brand, `${Number(entry.item.packageSize) || 1} ${entry.item.packageUnit || 'un'}`].filter(Boolean).join(' · ')}</small></span><span className="price-history-value"><strong>{money(entry.unitPrice)}</strong>{Number(entry.item.quantity) !== 1 && <small>{entry.item.quantity} itens · total {money(entry.item.totalPrice)}</small>}</span></article>)}</div> : <Empty icon={CircleDollarSign} title="Nenhum preço nesta variedade" text="Escolha outra variedade ou registre uma nova compra."/>}
+    {filteredEntries.length ? <div className="item-price-history-list">{filteredEntries.map((entry) => <article key={`${entry.purchase.id}-${entry.item.id}`} className="history-item-row">
+      <span className="price-history-date"><b>{shortDate(entry.purchase.purchasedAt)}</b><small>{entry.purchase.marketName}</small></span>
+      <span className="price-history-variant"><b>{entry.item.variety || 'Sem variedade'}</b><small>{[entry.item.brand, `${Number(entry.item.packageSize) || 1} ${entry.item.packageUnit || 'un'}`].filter(Boolean).join(' · ')}</small></span>
+      <span className="price-history-value"><strong>{money(entry.unitPrice)}</strong>{Number(entry.item.quantity) !== 1 && <small>{entry.item.quantity} itens · total {money(entry.item.totalPrice)}</small>}</span>
+      <div className="history-item-actions">
+        <button type="button" className="history-action-btn" title="Ver compra completa" aria-label="Ver compra" onClick={() => onOpenModal?.({ type: 'purchase-detail', purchase: entry.purchase, backModal: listItem ? { type: 'item', item: listItem } : null })}><Store size={13}/><span>Ver compra</span></button>
+        <button type="button" className="history-action-btn" title="Editar este item da compra" aria-label="Editar item da compra" onClick={() => onOpenModal?.({ type: 'edit-purchase-item', purchase: entry.purchase, item: entry.item, backModal: listItem ? { type: 'item', item: listItem } : null })}><Pencil size={13}/><span>Editar item</span></button>
+      </div>
+    </article>)}</div> : <Empty icon={CircleDollarSign} title="Nenhum preço nesta variedade" text="Escolha outra variedade ou registre uma nova compra."/>}
   </Modal>
 }
 
@@ -604,9 +632,12 @@ function getVariantPriceStats(state, product, variant) {
   }
 }
 
-function VariantDetailModal({ product, variant, state, onClose, onEditVariant }) {
+function VariantDetailModal({ product, variant, state, onClose, onEditVariant, onMergeVariant, onPromoteVariant, onOpenModal }) {
   const stats = getVariantPriceStats(state, product, variant)
   const variantTitle = [variant.variety, variant.brand].filter(Boolean).join(' · ') || 'Variação padrão'
+  const variants = normalizeProductVariants(product.variants)
+  const canMerge = variants.length >= 2
+
   return <Modal title={variantTitle} subtitle={`${product.name} · ${variant.packageSize} ${variant.packageUnit}`} onClose={onClose} wide>
     <div className={`variant-detail-header category-${categoryKey(product.category)}`}>
       <div className="variant-detail-badges">
@@ -615,11 +646,23 @@ function VariantDetailModal({ product, variant, state, onClose, onEditVariant })
         <span className="variant-pkg-badge">{variant.packageSize} {variant.packageUnit}</span>
         {variant.barcode && <span className="variant-barcode-badge">EAN: {variant.barcode}</span>}
       </div>
-      {onEditVariant && (
-        <button type="button" className="secondary variant-edit-btn" onClick={onEditVariant}>
-          <Pencil size={15} /> Editar variação
-        </button>
-      )}
+      <div className="variant-detail-actions-top">
+        {onEditVariant && (
+          <button type="button" className="secondary variant-edit-btn" onClick={onEditVariant}>
+            <Pencil size={15} /> Editar
+          </button>
+        )}
+        {canMerge && onMergeVariant && (
+          <button type="button" className="secondary variant-merge-btn" onClick={onMergeVariant} title="Mesclar com outra variedade">
+            <GitMerge size={15} /> Mesclar
+          </button>
+        )}
+        {onPromoteVariant && (
+          <button type="button" className="secondary variant-promote-btn" onClick={onPromoteVariant} title="Transformar em produto independente">
+            <PackagePlus size={15} /> Virar produto
+          </button>
+        )}
+      </div>
     </div>
 
     <div className="variant-stats-grid">
@@ -658,7 +701,7 @@ function VariantDetailModal({ product, variant, state, onClose, onEditVariant })
             const unitPrice = Number(item.unitPrice) || Number(item.totalPrice) / (Number(item.quantity) || 1)
             const normalized = normalizedPrice(item)
             return (
-              <article key={`${purchase.id}-${item.id}`}>
+              <article key={`${purchase.id}-${item.id}`} className="history-item-row">
                 <span className="price-history-date">
                   <b>{shortDate(purchase.purchasedAt)}</b>
                   <small>{purchase.marketName}</small>
@@ -671,6 +714,28 @@ function VariantDetailModal({ product, variant, state, onClose, onEditVariant })
                   <strong>{money(unitPrice)}</strong>
                   {Number(item.quantity) !== 1 && <small>total {money(item.totalPrice)}</small>}
                 </span>
+                <div className="history-item-actions">
+                  <button
+                    type="button"
+                    className="history-action-btn"
+                    title="Ver compra completa"
+                    aria-label="Ver compra"
+                    onClick={() => onOpenModal?.({ type: 'purchase-detail', purchase, backModal: { type: 'product-detail', product } })}
+                  >
+                    <Store size={13} />
+                    <span>Ver compra</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="history-action-btn"
+                    title="Editar este item da compra"
+                    aria-label="Editar item da compra"
+                    onClick={() => onOpenModal?.({ type: 'edit-purchase-item', purchase, item, backModal: { type: 'product-detail', product } })}
+                  >
+                    <Pencil size={13} />
+                    <span>Editar item</span>
+                  </button>
+                </div>
               </article>
             )
           })}
@@ -686,10 +751,12 @@ function VariantDetailModal({ product, variant, state, onClose, onEditVariant })
   </Modal>
 }
 
-function VariantEditModal({ product, initialVariant, state, onSave, onDelete, onClose }) {
+function VariantEditModal({ product, initialVariant, state, onSave, onDelete, onClose, onMergeVariant, onPromoteVariant }) {
   const [variant, setVariant] = useState(initialVariant)
   const isNew = Boolean(initialVariant.isNew)
   const stats = !isNew ? getVariantPriceStats(state, product, initialVariant) : null
+  const variants = normalizeProductVariants(product.variants)
+  const canMerge = !isNew && variants.length >= 2
 
   const submit = (event) => {
     event.preventDefault()
@@ -769,13 +836,35 @@ function VariantEditModal({ product, initialVariant, state, onSave, onDelete, on
 
         <div className="modal-actions variant-modal-actions">
           {!isNew && (
-            <button
-              type="button"
-              className="secondary danger"
-              onClick={() => onDelete(variant.id)}
-            >
-              <Trash2 size={16} /> Excluir
-            </button>
+            <div className="variant-modal-left-actions">
+              <button
+                type="button"
+                className="secondary danger"
+                onClick={() => onDelete(variant.id)}
+              >
+                <Trash2 size={16} /> Excluir
+              </button>
+              {canMerge && onMergeVariant && (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => onMergeVariant(variant)}
+                  title="Mesclar com outra variedade"
+                >
+                  <GitMerge size={15} /> Mesclar
+                </button>
+              )}
+              {onPromoteVariant && (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => onPromoteVariant(variant)}
+                  title="Transformar em produto independente"
+                >
+                  <PackagePlus size={15} /> Virar produto
+                </button>
+              )}
+            </div>
           )}
           <span className="grow" />
           <button type="button" className="secondary" onClick={onClose}>Cancelar</button>
@@ -786,7 +875,7 @@ function VariantEditModal({ product, initialVariant, state, onSave, onDelete, on
   )
 }
 
-function ProductDetailPanel({ product, state, onClose, onEdit }) {
+function ProductDetailPanel({ product, state, onClose, onEdit, onOpenModal }) {
   const [selectedVariant, setSelectedVariant] = useState(null)
   const variants = normalizeProductVariants(product.variants)
   const history = purchaseHistoryFor(state, product.name)
@@ -806,6 +895,17 @@ function ProductDetailPanel({ product, state, onClose, onEdit }) {
           setSelectedVariant(null)
           onEdit({ initialVariantId: vId })
         }}
+        onMergeVariant={() => {
+          const v = selectedVariant
+          setSelectedVariant(null)
+          onOpenModal?.({ type: 'merge-variants', product, variant: v })
+        }}
+        onPromoteVariant={() => {
+          const v = selectedVariant
+          setSelectedVariant(null)
+          onOpenModal?.({ type: 'variant-to-product', product, variant: v })
+        }}
+        onOpenModal={onOpenModal}
       />
     )
   }
@@ -888,17 +988,41 @@ function ProductDetailPanel({ product, state, onClose, onEdit }) {
       <header><div><h3>Histórico recente de compras</h3><p>{latest ? `Última compra em ${shortDate(latest.purchase.purchasedAt)}` : 'Ainda não há compras registradas.'}</p></div></header>
       {history.length ? (
         <div className="product-detail-history">
-          {history.slice(0, 8).map(({ purchase, item }) => {
+          {history.slice(0, 10).map(({ purchase, item }) => {
             const normalized = normalizedPrice(item)
             const variantTag = [item.variety, item.brand, `${item.packageSize} ${item.packageUnit}`].filter(Boolean).join(' · ')
             return (
-              <article key={`${purchase.id}-${item.id}`}>
-                <div>
+              <article key={`${purchase.id}-${item.id}`} className="product-detail-history-row">
+                <div className="product-detail-history-info">
                   <b>{purchase.marketName}</b>
                   <small>{shortDate(purchase.purchasedAt)} · <span className="history-variant-tag">{variantTag || 'Sem variação'}</span></small>
                   {normalized && <em>{money(normalized.value)} / {normalized.unit}</em>}
                 </div>
-                <strong>{money(item.totalPrice)}</strong>
+                <div className="product-detail-history-side">
+                  <strong>{money(item.totalPrice)}</strong>
+                  <div className="history-item-actions">
+                    <button
+                      type="button"
+                      className="history-action-btn"
+                      title="Ver compra completa"
+                      aria-label="Ver compra"
+                      onClick={() => onOpenModal?.({ type: 'purchase-detail', purchase, backModal: { type: 'product-detail', product } })}
+                    >
+                      <Store size={13} />
+                      <span>Ver compra</span>
+                    </button>
+                    <button
+                      type="button"
+                      className="history-action-btn"
+                      title="Editar este item da compra"
+                      aria-label="Editar item da compra"
+                      onClick={() => onOpenModal?.({ type: 'edit-purchase-item', purchase, item, backModal: { type: 'product-detail', product } })}
+                    >
+                      <Pencil size={13} />
+                      <span>Editar item</span>
+                    </button>
+                  </div>
+                </div>
               </article>
             )
           })}
@@ -912,7 +1036,7 @@ function ProductDetailPanel({ product, state, onClose, onEdit }) {
   </Modal>
 }
 
-function ProductPanel({ product: initial, initialVariantId, state, onClose, onSave }) {
+function ProductPanel({ product: initial, initialVariantId, state, onClose, onSave, onOpenModal }) {
   const [product, setProduct] = useState({ ...initial, variants: normalizeProductVariants(initial.variants) })
   const [editingVariant, setEditingVariant] = useState(() => {
     if (!initialVariantId) return null
@@ -1086,9 +1210,322 @@ function ProductPanel({ product: initial, initialVariantId, state, onClose, onSa
           onSave={saveVariant}
           onDelete={removeVariant}
           onClose={() => setEditingVariant(null)}
+          onMergeVariant={(variant) => {
+            setEditingVariant(null)
+            onOpenModal?.({ type: 'merge-variants', product, variant })
+          }}
+          onPromoteVariant={(variant) => {
+            setEditingVariant(null)
+            onOpenModal?.({ type: 'variant-to-product', product, variant })
+          }}
         />
       )}
     </>
+  )
+}
+
+function VariantMergeModal({ product, initialSourceVariant, state, onClose, onMerge }) {
+  const variants = normalizeProductVariants(product.variants)
+  const [sourceId, setSourceId] = useState(initialSourceVariant?.id || variants[0]?.id)
+  const [targetId, setTargetId] = useState(() => {
+    const other = variants.find((v) => v.id !== (initialSourceVariant?.id || variants[0]?.id))
+    return other?.id || variants[0]?.id || ''
+  })
+
+  const sourceVariant = variants.find((v) => v.id === sourceId) || variants[0]
+  const targetVariant = variants.find((v) => v.id === targetId) || variants.find((v) => v.id !== sourceId) || variants[0]
+
+  const [overrides, setOverrides] = useState({
+    variety: targetVariant?.variety || '',
+    brand: targetVariant?.brand || '',
+    packageSize: targetVariant?.packageSize || 1,
+    packageUnit: targetVariant?.packageUnit || product.defaultUnit || 'un',
+    barcode: targetVariant?.barcode || '',
+  })
+
+  useEffect(() => {
+    if (targetVariant) {
+      setOverrides({
+        variety: targetVariant.variety || '',
+        brand: targetVariant.brand || '',
+        packageSize: targetVariant.packageSize || 1,
+        packageUnit: targetVariant.packageUnit || product.defaultUnit || 'un',
+        barcode: targetVariant.barcode || '',
+      })
+    }
+  }, [targetVariant?.id])
+
+  const swap = () => {
+    const prevSource = sourceId
+    const prevTarget = targetId
+    setSourceId(prevTarget)
+    setTargetId(prevSource)
+  }
+
+  const sourceStats = sourceVariant ? getVariantPriceStats(state, product, sourceVariant) : null
+  const targetStats = targetVariant ? getVariantPriceStats(state, product, targetVariant) : null
+  const totalPurchases = (sourceStats?.count || 0) + (targetStats?.count || 0)
+
+  const handleConfirm = () => {
+    if (!sourceVariant || !targetVariant || sourceVariant.id === targetVariant.id) return
+    onMerge({
+      productId: product.id,
+      sourceVariantId: sourceVariant.id,
+      targetVariantId: targetVariant.id,
+      targetOverrides: overrides,
+    })
+  }
+
+  const otherVariants = variants.filter((v) => v.id !== sourceId)
+
+  return (
+    <Modal
+      title="Mesclar variedades"
+      subtitle={`${product.name} · Unifique variações repetidas`}
+      onClose={onClose}
+    >
+      <div className="merge-flow">
+        <div className="merge-exchange-card">
+          <div className="merge-exchange-item main">
+            <span className="merge-exchange-tag">Manter (Principal)</span>
+            <b className="merge-exchange-name">{targetVariant?.variety || 'Variação padrão'}</b>
+            <small className="merge-exchange-meta">
+              {[targetVariant?.brand, `${targetVariant?.packageSize || 1} ${targetVariant?.packageUnit || 'un'}`].filter(Boolean).join(' · ')}
+              {targetStats?.count ? ` · ${targetStats.count} compras` : ' · 0 compras'}
+            </small>
+          </div>
+
+          <button
+            type="button"
+            className="merge-swap-btn"
+            onClick={swap}
+            title="Inverter lados: tornar a outra variação a principal"
+            aria-label="Inverter lados"
+          >
+            <ArrowLeftRight size={15} />
+            <span>Inverter</span>
+          </button>
+
+          <div className="merge-exchange-item absorbed">
+            <span className="merge-exchange-tag">Absorver (Remover)</span>
+            <b className="merge-exchange-name">{sourceVariant?.variety || 'Variação padrão'}</b>
+            <small className="merge-exchange-meta">
+              {[sourceVariant?.brand, `${sourceVariant?.packageSize || 1} ${sourceVariant?.packageUnit || 'un'}`].filter(Boolean).join(' · ')}
+              {sourceStats?.count ? ` · ${sourceStats.count} compras` : ' · 0 compras'}
+            </small>
+          </div>
+        </div>
+
+        {otherVariants.length > 1 && (
+          <Field label="Unificar na variedade principal:">
+            <select
+              value={targetId}
+              onChange={(e) => setTargetId(e.target.value)}
+            >
+              {otherVariants.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {[v.variety || 'Variação padrão', v.brand, `${v.packageSize} ${v.packageUnit}`].filter(Boolean).join(' · ')}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+
+        <div className="merge-name-selection">
+          <label className="merge-section-label">Nome da variedade final (Sabor / Tipo)</label>
+          <div className="merge-name-pills">
+            {targetVariant?.variety && (
+              <button
+                type="button"
+                className={`merge-name-pill ${overrides.variety === targetVariant.variety ? 'selected' : ''}`}
+                onClick={() => setOverrides((c) => ({ ...c, variety: targetVariant.variety }))}
+              >
+                <Check size={12} className="pill-check" />
+                <span>{targetVariant.variety}</span>
+              </button>
+            )}
+            {sourceVariant?.variety && sourceVariant.variety !== targetVariant?.variety && (
+              <button
+                type="button"
+                className={`merge-name-pill ${overrides.variety === sourceVariant.variety ? 'selected' : ''}`}
+                onClick={() => setOverrides((c) => ({ ...c, variety: sourceVariant.variety }))}
+              >
+                <Check size={12} className="pill-check" />
+                <span>{sourceVariant.variety}</span>
+              </button>
+            )}
+          </div>
+          <input
+            value={overrides.variety}
+            onChange={(e) => setOverrides({ ...overrides, variety: e.target.value })}
+            placeholder="Ex.: Integral, Tradicional"
+          />
+        </div>
+
+        <Field label="Marca da variedade">
+          <input
+            value={overrides.brand}
+            onChange={(e) => setOverrides({ ...overrides, brand: e.target.value })}
+            placeholder="Ex.: Camil, Nestlé (opcional)"
+          />
+        </Field>
+
+        <Field label="Tamanho da embalagem">
+          <div className="joined">
+            <input
+              type="number"
+              min="0.001"
+              step="0.001"
+              required
+              value={overrides.packageSize}
+              onChange={(e) => setOverrides({ ...overrides, packageSize: e.target.value })}
+            />
+            <select
+              value={overrides.packageUnit}
+              onChange={(e) => setOverrides({ ...overrides, packageUnit: e.target.value })}
+            >
+              {UNITS.map((unit) => (
+                <option key={unit} value={unit}>{unit}</option>
+              ))}
+            </select>
+          </div>
+        </Field>
+
+        <div className="merge-summary-card">
+          <div className="merge-summary-header">
+            <div>
+              <b>Resultado: {totalPurchases} {totalPurchases === 1 ? 'compra unificada' : 'compras unificadas'}</b>
+              <small>Todas as compras, listas e leituras de notas da variedade absorvida serão associadas a esta.</small>
+            </div>
+          </div>
+        </div>
+
+        <div className="modal-actions">
+          <button type="button" className="secondary" onClick={onClose}>Cancelar</button>
+          <button
+            type="button"
+            className="primary"
+            onClick={handleConfirm}
+            disabled={!targetVariant || targetVariant.id === sourceVariant?.id}
+          >
+            <GitMerge size={17} /> Confirmar unificação
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function VariantToProductModal({ product, variant, state, onClose, onPromote }) {
+  const suggestedName = suggestNewProductName(product.name, variant)
+  const [name, setName] = useState(suggestedName)
+  const [category, setCategory] = useState(product.category || 'Outros')
+  const [defaultUnit, setDefaultUnit] = useState(variant.packageUnit || product.defaultUnit || 'un')
+  const [variantVariety, setVariantVariety] = useState('')
+
+  const stats = getVariantPriceStats(state, product, variant)
+
+  const submit = (e) => {
+    e.preventDefault()
+    if (!name.trim()) return
+    onPromote({
+      sourceProductId: product.id,
+      variantId: variant.id,
+      newProduct: {
+        name: name.trim(),
+        category,
+        defaultUnit,
+        variantVariety: variantVariety.trim(),
+      },
+    })
+  }
+
+  return (
+    <Modal
+      title="Transformar em produto próprio"
+      subtitle={`Desmembrar "${variant.variety || 'Variação'}" de ${product.name}`}
+      onClose={onClose}
+    >
+      <form onSubmit={submit} className="merge-flow">
+        <div className="promote-variant-preview">
+          <span className="promote-source-tag">Variação original:</span>
+          <b>{[product.name, variant.variety, variant.brand].filter(Boolean).join(' · ')}</b>
+          <small>{variant.packageSize} {variant.packageUnit} · {stats.count} {stats.count === 1 ? 'compra registrada' : 'compras registradas'}</small>
+        </div>
+
+        <Field label="Nome do novo produto">
+          <div className="merge-name-pills">
+            <button
+              type="button"
+              className={`merge-name-pill ${name === suggestedName ? 'selected' : ''}`}
+              onClick={() => setName(suggestedName)}
+            >
+              <Check size={12} className="pill-check" />
+              <span>{suggestedName}</span>
+            </button>
+            {variant.variety && variant.variety !== suggestedName && (
+              <button
+                type="button"
+                className={`merge-name-pill ${name === variant.variety ? 'selected' : ''}`}
+                onClick={() => setName(variant.variety)}
+              >
+                <Check size={12} className="pill-check" />
+                <span>{variant.variety}</span>
+              </button>
+            )}
+          </div>
+          <input
+            autoFocus
+            required
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ex.: Leite Condensado, Coca-Cola Zero"
+          />
+        </Field>
+
+        <div className="form-grid merge-cat-unit">
+          <Field label="Categoria">
+            <select value={category} onChange={(e) => setCategory(e.target.value)}>
+              {CATEGORIES.map((cat) => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Unidade padrão">
+            <select value={defaultUnit} onChange={(e) => setDefaultUnit(e.target.value)}>
+              {UNITS.map((unit) => (
+                <option key={unit} value={unit}>{unit}</option>
+              ))}
+            </select>
+          </Field>
+        </div>
+
+        <Field label="Sabor / Tipo no novo produto (opcional)">
+          <input
+            value={variantVariety}
+            onChange={(e) => setVariantVariety(e.target.value)}
+            placeholder="Ex.: Tradicional (ou deixe vazio se o tipo já estiver no nome do produto)"
+          />
+          <small>Se deixar vazio, a variação principal do novo produto será a padrão.</small>
+        </Field>
+
+        <div className="merge-summary-card">
+          <div className="merge-summary-header">
+            <div>
+              <b>{stats.count} {stats.count === 1 ? 'compra será transferida' : 'compras serão transferidas'}</b>
+              <small>O produto original deixará de ter esta variação e todo o histórico será direcionado para o novo produto.</small>
+            </div>
+          </div>
+        </div>
+
+        <div className="modal-actions">
+          <button type="button" className="secondary" onClick={onClose}>Cancelar</button>
+          <button type="submit" className="primary" disabled={!name.trim()}>
+            <PackagePlus size={17} /> Criar produto independente
+          </button>
+        </div>
+      </form>
+    </Modal>
   )
 }
 
@@ -1425,9 +1862,357 @@ function ProductMatchEditor({ item, items, setItems, products }) {
   </section>
 }
 
-function findMatchingVariant(product, item) { return normalizeProductVariants(product.variants).find((variant) => variantMatchesItem(variant, item)) }
+function PurchaseDetail({ purchase, market, onClose, onBack, onEdit, onEditItem, onDelete }) {
+  return <Modal title={purchase.marketName} subtitle={`${shortDate(purchase.purchasedAt)} · ${purchase.items.length} itens${market?.cnpj ? ` · CNPJ ${market.cnpj}` : ''}`} onClose={onClose} wide>
+    {onBack && <button type="button" className="ghost price-history-back" onClick={onBack}><ChevronRight size={17}/> Voltar</button>}
+    <div className="receipt-total"><span>Total</span><strong>{money(purchase.total)}</strong></div>
+    <div className="purchase-detail-actions">
+      <button className="secondary" onClick={onEdit}><Pencil size={17}/> Editar compra</button>
+      <button className="secondary danger purchase-delete-button" onClick={onDelete}><Trash2 size={17}/> Remover compra</button>
+    </div>
+    <div className="receipt-items">
+      {purchase.items.map((item) => {
+        const normalized = normalizedPrice(item)
+        const mappedFrom = item.originalDescription || item.importedProductName
+        const showMapping = mappedFrom && normalizeText(mappedFrom) !== normalizeText(item.productName)
+        return <div key={item.id} className="receipt-item-row">
+          <div className="receipt-item-info">
+            <b>{item.productName}</b>
+            <small>{[item.variety, item.brand].filter(Boolean).join(' · ') || 'Sem sabor/tipo ou marca'} · {item.quantity} × {item.packageSize} {item.packageUnit}</small>
+            {showMapping && <small className="purchase-mapping"><PackageCheck size={12}/> Mapeado de “{mappedFrom}”</small>}
+            {normalized && <em>{money(normalized.value)} / {normalized.unit}</em>}
+          </div>
+          <div className="receipt-item-side">
+            <strong>{money(item.totalPrice)}</strong>
+            {onEditItem && (
+              <button
+                type="button"
+                className="receipt-item-edit-btn"
+                title="Editar este item da compra"
+                aria-label="Editar item da compra"
+                onClick={() => onEditItem(item)}
+              >
+                <Pencil size={13}/>
+                <span>Editar</span>
+              </button>
+            )}
+          </div>
+        </div>
+      })}
+    </div>
+  </Modal>
+}
 
-function PurchaseDetail({ purchase, market, onClose, onEdit, onDelete }) { return <Modal title={purchase.marketName} subtitle={`${shortDate(purchase.purchasedAt)} · ${purchase.items.length} itens${market?.cnpj ? ` · CNPJ ${market.cnpj}` : ''}`} onClose={onClose} wide><div className="receipt-total"><span>Total</span><strong>{money(purchase.total)}</strong></div><div className="purchase-detail-actions"><button className="secondary" onClick={onEdit}><Pencil size={17}/> Editar compra</button><button className="secondary danger purchase-delete-button" onClick={onDelete}><Trash2 size={17}/> Remover compra</button></div><div className="receipt-items">{purchase.items.map((item) => { const normalized = normalizedPrice(item); const mappedFrom = item.originalDescription || item.importedProductName; const showMapping = mappedFrom && normalizeText(mappedFrom) !== normalizeText(item.productName); return <div key={item.id}><div><b>{item.productName}</b><small>{[item.variety, item.brand].filter(Boolean).join(' · ') || 'Sem sabor/tipo ou marca'} · {item.quantity} × {item.packageSize} {item.packageUnit}</small>{showMapping && <small className="purchase-mapping"><PackageCheck size={12}/> Mapeado de “{mappedFrom}”</small>}{normalized && <em>{money(normalized.value)} / {normalized.unit}</em>}</div><strong>{money(item.totalPrice)}</strong></div> })}</div></Modal> }
+function EditPurchaseItemModal({ purchase, item: initialItem, state, onClose, onSave, onBack }) {
+  const initialProduct = state.products.find((p) => p.id === initialItem.productId) ||
+    state.products.find((p) => normalizeText(p.name) === normalizeText(initialItem.productName))
+
+  const [targetProductId, setTargetProductId] = useState(initialProduct ? initialProduct.id : 'new')
+  const [targetVariantId, setTargetVariantId] = useState(() => {
+    if (initialItem.variantId) return initialItem.variantId
+    if (initialProduct) {
+      const match = normalizeProductVariants(initialProduct.variants).find((v) => variantMatchesItem(v, initialItem))
+      if (match) return match.id
+    }
+    return 'new'
+  })
+
+  const [itemData, setItemData] = useState({
+    productName: initialItem.productName || (initialProduct?.name || ''),
+    variety: initialItem.variety || '',
+    brand: initialItem.brand || '',
+    category: initialItem.category || initialProduct?.category || 'Outros',
+    packageSize: Number(initialItem.packageSize) || 1,
+    packageUnit: initialItem.packageUnit || 'un',
+    quantity: Number(initialItem.quantity) || 1,
+    unitPrice: Number(initialItem.unitPrice) || (Number(initialItem.totalPrice) / (Number(initialItem.quantity) || 1)) || 0,
+    totalPrice: Number(initialItem.totalPrice) || 0,
+    barcode: initialItem.barcode || '',
+  })
+
+  const activeProducts = state.products
+    .filter((p) => !p.archivedAt)
+    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' }))
+
+  const selectedProduct = state.products.find((p) => p.id === targetProductId)
+  const productVariants = normalizeProductVariants(selectedProduct?.variants)
+
+  const handleProductChange = (newProdId) => {
+    setTargetProductId(newProdId)
+    if (newProdId === 'new') {
+      setTargetVariantId('new')
+      setItemData((curr) => ({
+        ...curr,
+        productName: curr.productName || initialItem.productName || '',
+        category: curr.category || 'Outros',
+      }))
+    } else {
+      const prod = state.products.find((p) => p.id === newProdId)
+      if (prod) {
+        const variants = normalizeProductVariants(prod.variants)
+        const matching = variants.find((v) => variantMatchesItem(v, itemData))
+        if (matching) {
+          setTargetVariantId(matching.id)
+          setItemData((curr) => ({
+            ...curr,
+            productName: prod.name,
+            category: prod.category || curr.category,
+            variety: matching.variety || '',
+            brand: matching.brand || '',
+            packageSize: matching.packageSize,
+            packageUnit: matching.packageUnit,
+            barcode: matching.barcode || curr.barcode,
+          }))
+        } else {
+          setTargetVariantId('new')
+          setItemData((curr) => ({
+            ...curr,
+            productName: prod.name,
+            category: prod.category || curr.category,
+          }))
+        }
+      }
+    }
+  }
+
+  const handleVariantChange = (newVarId) => {
+    setTargetVariantId(newVarId)
+    if (newVarId !== 'new' && selectedProduct) {
+      const variant = productVariants.find((v) => v.id === newVarId)
+      if (variant) {
+        setItemData((curr) => ({
+          ...curr,
+          variety: variant.variety || '',
+          brand: variant.brand || '',
+          packageSize: variant.packageSize,
+          packageUnit: variant.packageUnit,
+          barcode: variant.barcode || curr.barcode,
+        }))
+      }
+    }
+  }
+
+  const handleQuantityChange = (qtyVal) => {
+    const qty = Number(qtyVal)
+    setItemData((curr) => {
+      const uPrice = Number(curr.unitPrice) || 0
+      return {
+        ...curr,
+        quantity: qtyVal,
+        totalPrice: uPrice > 0 && qty > 0 ? Number((uPrice * qty).toFixed(2)) : curr.totalPrice,
+      }
+    })
+  }
+
+  const handleUnitPriceChange = (priceVal) => {
+    const uPrice = Number(priceVal)
+    setItemData((curr) => {
+      const qty = Number(curr.quantity) || 1
+      return {
+        ...curr,
+        unitPrice: priceVal,
+        totalPrice: uPrice > 0 && qty > 0 ? Number((uPrice * qty).toFixed(2)) : curr.totalPrice,
+      }
+    })
+  }
+
+  const handleTotalPriceChange = (totalVal) => {
+    const tot = Number(totalVal)
+    setItemData((curr) => {
+      const qty = Number(curr.quantity) || 1
+      return {
+        ...curr,
+        totalPrice: totalVal,
+        unitPrice: tot > 0 && qty > 0 ? Number((tot / qty).toFixed(2)) : curr.unitPrice,
+      }
+    })
+  }
+
+  const submit = (event) => {
+    event.preventDefault()
+    onSave({
+      purchaseId: purchase.id,
+      itemId: initialItem.id,
+      targetProductId,
+      targetVariantId,
+      itemData,
+      createVariantInProduct: true,
+    })
+  }
+
+  const originalDescription = initialItem.originalDescription || initialItem.importedProductName
+
+  return (
+    <Modal
+      title="Editar item da compra"
+      subtitle={`${purchase.marketName || 'Compra'} · ${shortDate(purchase.purchasedAt)}`}
+      onClose={onClose}
+      wide
+    >
+      {onBack && (
+        <button type="button" className="ghost price-history-back" onClick={onBack}>
+          <ChevronRight size={17} /> Voltar
+        </button>
+      )}
+
+      {originalDescription && (
+        <div className="item-edit-original-box">
+          <small>Registro original na nota fiscal:</small>
+          <b>{originalDescription}</b>
+        </div>
+      )}
+
+      <form onSubmit={submit}>
+        <section className="catalog-selection" style={{ marginBottom: '16px' }}>
+          <div className="catalog-selection-grid">
+            <label>
+              <span>1. Associar ao produto no catálogo</span>
+              <select
+                value={targetProductId}
+                onChange={(e) => handleProductChange(e.target.value)}
+              >
+                <option value="new">➕ Cadastrar como novo produto</option>
+                {activeProducts.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} · {p.category}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label>
+              <span>2. Variação no catálogo</span>
+              <select
+                disabled={targetProductId === 'new'}
+                value={targetVariantId}
+                onChange={(e) => handleVariantChange(e.target.value)}
+              >
+                <option value="new">
+                  {targetProductId === 'new'
+                    ? 'Nova variação do novo produto'
+                    : '➕ Criar como nova variedade neste produto'}
+                </option>
+                {productVariants.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {[v.variety || 'Padrão', v.brand || 'Sem marca', `${v.packageSize} ${v.packageUnit}`].join(' · ')}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {targetProductId !== 'new' && targetVariantId === 'new' && (
+            <small className="mapping-explanation" style={{ marginTop: '8px', display: 'block' }}>
+              💡 Os dados abaixo (sabor, marca, tamanho) serão salvos como nova variedade no produto <b>{selectedProduct?.name}</b>.
+            </small>
+          )}
+        </section>
+
+        <div className="form-grid">
+          {targetProductId === 'new' && (
+            <Field label="Nome do produto">
+              <input
+                required
+                value={itemData.productName}
+                onChange={(e) => setItemData({ ...itemData, productName: e.target.value })}
+                placeholder="Ex.: Chocolate, Arroz, Sabonete"
+              />
+            </Field>
+          )}
+          <Field label="Sabor / Tipo / Versão">
+            <input
+              value={itemData.variety}
+              onChange={(e) => setItemData({ ...itemData, variety: e.target.value })}
+              placeholder="Ex.: Amargo, Integral, Zero açúcar"
+            />
+          </Field>
+          <Field label="Marca">
+            <input
+              value={itemData.brand}
+              onChange={(e) => setItemData({ ...itemData, brand: e.target.value })}
+              placeholder="Ex.: Hershey's, Camil, Nestlé"
+            />
+          </Field>
+          <Field label="Categoria">
+            <select
+              value={itemData.category}
+              onChange={(e) => setItemData({ ...itemData, category: e.target.value })}
+            >
+              {CATEGORIES.map((cat) => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Tamanho da embalagem">
+            <div className="joined">
+              <input
+                type="number"
+                min="0.001"
+                step="0.001"
+                required
+                value={itemData.packageSize}
+                onChange={(e) => setItemData({ ...itemData, packageSize: e.target.value })}
+              />
+              <select
+                value={itemData.packageUnit}
+                onChange={(e) => setItemData({ ...itemData, packageUnit: e.target.value })}
+              >
+                {['un', 'kg', 'g', 'L', 'ml'].map((unit) => (
+                  <option key={unit} value={unit}>{unit}</option>
+                ))}
+              </select>
+            </div>
+          </Field>
+          <Field label="Quantidade comprada">
+            <input
+              type="number"
+              min="0.001"
+              step="0.001"
+              required
+              value={itemData.quantity}
+              onChange={(e) => handleQuantityChange(e.target.value)}
+            />
+          </Field>
+          <Field label="Preço unitário (R$)">
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              required
+              value={itemData.unitPrice}
+              onChange={(e) => handleUnitPriceChange(e.target.value)}
+            />
+          </Field>
+          <Field label="Preço total (R$)">
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              required
+              value={itemData.totalPrice}
+              onChange={(e) => handleTotalPriceChange(e.target.value)}
+            />
+          </Field>
+          <Field label="Código de barras (GTIN/EAN)">
+            <input
+              value={itemData.barcode}
+              onChange={(e) => setItemData({ ...itemData, barcode: e.target.value })}
+              placeholder="Opcional"
+            />
+          </Field>
+        </div>
+
+        <div className="modal-actions">
+          <button type="button" className="secondary" onClick={onClose}>
+            Cancelar
+          </button>
+          <button className="primary">
+            <Check size={16} /> Salvar alterações
+          </button>
+        </div>
+      </form>
+    </Modal>
+  )
+}
 
 function DeletePurchaseModal({ purchase, onClose, onConfirm }) {
   return <Modal title="Remover compra?" subtitle="Esta ação não pode ser desfeita." onClose={onClose}>
