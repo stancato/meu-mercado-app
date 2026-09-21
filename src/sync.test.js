@@ -48,3 +48,53 @@ test('uma alteração local vence o remoto inalterado mesmo com relógio atrasad
   const merged = mergeSyncedStates(base, local, base)
   assert.equal(merged.lists[0].items[0].checked, true)
 })
+
+test('produto com variedades atualizado remotamente vence cache local defasado sem base comum', () => {
+  const localStaleProduct = {
+    id: 'prod-leite',
+    name: 'Leite',
+    variants: [],
+    updatedAt: '2026-08-21T10:00:00.000Z',
+  }
+  const remoteUpdatedProduct = {
+    id: 'prod-leite',
+    name: 'Leite',
+    variants: [
+      { id: 'var-desnatado', variety: 'Desnatado', brand: 'Piracanjuba' },
+      { id: 'var-integral', variety: 'Integral', brand: 'Piracanjuba' },
+    ],
+    updatedAt: '2026-08-21T10:15:00.000Z',
+  }
+  const localState = state([], '2026-08-21T10:00:00.000Z', { products: [localStaleProduct] })
+  const remoteState = state([], '2026-08-21T10:15:00.000Z', { products: [remoteUpdatedProduct] })
+
+  // Na hidratação inicial onde base é vazia, o produto remoto mais recente deve prevalecer
+  const merged = mergeSyncedStates({}, localState, remoteState)
+  assert.equal(merged.products.length, 1)
+  assert.equal(merged.products[0].variants.length, 2)
+  assert.equal(merged.products[0].variants[0].variety, 'Desnatado')
+})
+
+test('produto editado localmente com timestamp mais recente prevalece sobre cópia remota', () => {
+  const remoteProduct = {
+    id: 'prod-cafe',
+    name: 'Café',
+    variants: [{ id: 'var-1', variety: 'Tradicional' }],
+    updatedAt: '2026-08-21T10:00:00.000Z',
+  }
+  const localProduct = {
+    id: 'prod-cafe',
+    name: 'Café',
+    variants: [
+      { id: 'var-1', variety: 'Tradicional' },
+      { id: 'var-2', variety: 'Extra Forte' },
+    ],
+    updatedAt: '2026-08-21T10:30:00.000Z',
+  }
+  const localState = state([], '2026-08-21T10:30:00.000Z', { products: [localProduct] })
+  const remoteState = state([], '2026-08-21T10:00:00.000Z', { products: [remoteProduct] })
+
+  const merged = mergeSyncedStates({}, localState, remoteState)
+  assert.equal(merged.products[0].variants.length, 2)
+})
+

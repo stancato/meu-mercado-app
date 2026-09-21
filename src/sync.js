@@ -47,6 +47,8 @@ const mergeItemArrays = (base = [], local = [], remote = [], tombstones = [], lo
   })
 }
 
+const entryTime = (entry) => asTime(entry?.updatedAt || entry?.purchasedAt || entry?.createdAt || 0)
+
 const mergeEntityArrays = (base = [], local = [], remote = []) => {
   const keyOf = (entry) => String(entry?.id || '')
   const baseMap = new Map(base.map((entry) => [keyOf(entry), entry]))
@@ -60,7 +62,19 @@ const mergeEntityArrays = (base = [], local = [], remote = []) => {
     const remoteEntry = remoteMap.get(key)
     if (same(localEntry, baseEntry)) return remoteEntry ? [remoteEntry] : []
     if (same(remoteEntry, baseEntry)) return localEntry ? [localEntry] : []
-    return localEntry ? [localEntry] : remoteEntry ? [remoteEntry] : []
+    if (!localEntry) return remoteEntry ? [remoteEntry] : []
+    if (!remoteEntry) return localEntry ? [localEntry] : []
+    const localTime = entryTime(localEntry)
+    const remoteTime = entryTime(remoteEntry)
+    if (localTime !== remoteTime) {
+      return localTime > remoteTime ? [localEntry] : [remoteEntry]
+    }
+    const localVariants = Array.isArray(localEntry.variants) ? localEntry.variants.length : 0
+    const remoteVariants = Array.isArray(remoteEntry.variants) ? remoteEntry.variants.length : 0
+    if (localVariants !== remoteVariants) {
+      return localVariants > remoteVariants ? [localEntry] : [remoteEntry]
+    }
+    return [remoteEntry || localEntry]
   })
 }
 

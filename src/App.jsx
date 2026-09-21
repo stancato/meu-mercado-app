@@ -30,7 +30,7 @@ const ANALYTICS_PERIODS = [
 ]
 
 export default function App({ user }) {
-  const { state, mutate, syncStatus } = useStore()
+  const { state, mutate, syncStatus, syncNow } = useStore()
   const [tab, setTab] = useState('lists')
   const [modal, setModal] = useState(null)
   const [toast, setToast] = useState('')
@@ -73,7 +73,24 @@ export default function App({ user }) {
     <header className="topbar">
       <div className="topbar-inner">
         <div className="brand"><span className="brand-mark"><ShoppingBasket size={22} /></span><div><strong>Meu Mercado</strong><small>compre melhor, compare sempre</small></div></div>
-        <span className={`sync-pill ${syncStatus} ${user ? 'with-account' : ''}`} title={user ? `${user.displayName || user.email} · ${syncStatus === 'synced' ? 'Sincronizado' : 'Sincronizando'}` : 'Situação da sincronização'}>{user ? <UserAvatar user={user}/> : syncStatus === 'synced' ? <Cloud size={14}/> : <CloudOff size={14}/>}<span>{user ? user.displayName?.split(' ')[0] || 'Conta Google' : syncStatus === 'synced' ? 'Sincronizado' : firebaseReady ? 'Local' : 'Modo local'}</span></span>
+        <button
+          type="button"
+          className={`sync-pill ${syncStatus} ${user ? 'with-account' : ''} sync-button-pill`}
+          onClick={async () => {
+            if (!user) {
+              setTab('settings')
+              setToast('Faça login com a conta Google para sincronizar entre dispositivos.')
+              return
+            }
+            setToast('Sincronizando com a nuvem...')
+            await syncNow()
+            setToast('Dados sincronizados com sucesso!')
+          }}
+          title={user ? `${user.displayName || user.email} · Clique para sincronizar agora` : 'Toque para entrar na conta'}
+        >
+          {syncStatus === 'syncing' ? <Loader2 size={14} className="spin"/> : user ? <UserAvatar user={user}/> : syncStatus === 'synced' ? <Cloud size={14}/> : <CloudOff size={14}/>}
+          <span>{syncStatus === 'syncing' ? 'Sincronizando...' : user ? user.displayName?.split(' ')[0] || 'Conta Google' : syncStatus === 'synced' ? 'Sincronizado' : firebaseReady ? 'Local' : 'Modo local'}</span>
+        </button>
       </div>
     </header>
 
@@ -82,7 +99,7 @@ export default function App({ user }) {
       {tab === 'purchases' && <PurchasesPage state={state} open={setModal} />}
       {tab === 'prices' && <AnalyticsPage state={state} />}
       {tab === 'products' && <ProductsPage state={state} mutate={mutate} open={setModal} />}
-      {tab === 'settings' && <SettingsPage state={state} mutate={mutate} user={user} open={setModal} toast={setToast} />}
+      {tab === 'settings' && <SettingsPage state={state} mutate={mutate} user={user} open={setModal} toast={setToast} syncNow={syncNow} />}
     </main>
 
     <nav className="bottom-nav">{NAV.map(([id, label, Icon]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}><span className="nav-icon"><Icon size={21}/>{id === 'lists' && pendingListCount > 0 && <span className="nav-badge" aria-label={`${pendingListCount} itens para comprar`}>{pendingListCount > 99 ? '99+' : pendingListCount}</span>}</span><span>{label}</span></button>)}</nav>
@@ -466,7 +483,8 @@ function UserAvatar({ user }) {
   return <span className="user-avatar avatar-fallback" aria-hidden="true">{initials}</span>
 }
 
-function SettingsPage({ state, mutate, user, open, toast }) {
+function SettingsPage({ state, mutate, user, open, toast, syncNow }) {
+  const [syncingNow, setSyncingNow] = useState(false)
   const savedTheme = state.settings?.theme
   const activeTheme = savedTheme === 'light' || savedTheme === 'dark'
     ? savedTheme
@@ -474,8 +492,19 @@ function SettingsPage({ state, mutate, user, open, toast }) {
   const chooseTheme = (theme) => mutate((current) => ({ ...current, settings: { ...current.settings, theme } }))
   return <><PageHeader title="Ajustes" text="Conta, aparência e estado da sincronização."/><div className="settings-list">
     <section className="settings-card"><span className="card-icon account-icon">{user ? <UserAvatar user={user}/> : <LogIn/>}</span><div className="grow"><b>{user ? user.displayName : 'Conta Google'}</b><small>{user ? user.email : firebaseReady ? 'Entre para sincronizar entre dispositivos' : 'Firebase ainda não configurado; seus dados estão seguros neste dispositivo'}</small></div>{user ? <button className="secondary" onClick={() => signOut(auth)}><LogOut size={16}/> Sair</button> : <button className="primary" disabled={!firebaseReady} onClick={() => loginWithGoogle().catch((e) => toast(e.message))}>Entrar</button>}</section>
+    <section className="settings-card"><span className="card-icon"><RotateCcw size={20} className={syncingNow ? 'spin' : ''}/></span><div className="grow"><b>Sincronizar com a nuvem</b><small>{user ? 'Baixar atualizações mais recentes e enviar alterações' : 'Entre em uma conta Google para sincronizar entre dispositivos'}</small></div><button className="secondary" disabled={!user || syncingNow} onClick={async () => {
+      if (!syncNow) return
+      setSyncingNow(true)
+      toast('Sincronizando com a nuvem...')
+      try {
+        await syncNow()
+        toast('Dados sincronizados com sucesso!')
+      } finally {
+        setSyncingNow(false)
+      }
+    }}><RotateCcw size={16} className={syncingNow ? 'spin' : ''}/> {syncingNow ? 'Sincronizando...' : 'Sincronizar agora'}</button></section>
     <section className="settings-card theme-setting"><span className="card-icon"><Sun/></span><div className="grow"><b>Aparência</b><small>Escolha o tema que fica melhor para você</small></div><div className="theme-options" aria-label="Tema do aplicativo"><button className={activeTheme === 'light' ? 'active' : ''} aria-pressed={activeTheme === 'light'} onClick={() => chooseTheme('light')}><Sun size={16}/> Claro</button><button className={activeTheme === 'dark' ? 'active' : ''} aria-pressed={activeTheme === 'dark'} onClick={() => chooseTheme('dark')}><Moon size={16}/> Escuro</button></div></section>
-    <button className="settings-card clickable" onClick={() => open({ type: 'prompt' })}><span className="card-icon"><ClipboardCopy/></span><div className="grow"><b>Prompt para leitura da nota</b><small>Copie o formato esperado e use na IA de sua preferência</small></div><ChevronRight/></button><section className="settings-card"><span className="card-icon"><CloudOff/></span><div><b>PWA e modo offline</b><small>A lista permanece disponível sem conexão. A sincronização ocorre ao voltar.</small></div></section>
+    <button className="settings-card clickable" onClick={() => open({ type: 'prompt' })}><span className="card-icon"><ClipboardCopy/></span><div className="grow"><b>Prompt para leitura da nota</b><small>Copie o formato esperado e use na IA de sua preferência</small></div><ChevronRight/></button><section className="settings-card"><span className="card-icon"><CloudOff/></span><div><b>PWA e modo offline</b><small>A lista permanece disponível sem conexão. A sincronização ocorre automaticamente em tempo real e ao voltar ao app.</small></div></section>
   </div></>
 }
 
@@ -633,15 +662,22 @@ function PriceHistoryPanel({ productName, entries, filter, selectedVarietyLabel,
     <button type="button" className="ghost price-history-back" onClick={onBack}><ChevronRight size={17}/> Voltar para a edição</button>
     <Field label="Filtrar por variedade"><select value={filter} onChange={(event) => onFilterChange(event.target.value)}><option value="all">Todas as variedades</option>{varieties.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></Field>
     <div className="price-history-summary"><div><small>Preço médio</small><strong>{filteredEntries.length ? money(average) : '—'}</strong><span>por item comprado</span></div><div><small>Registros</small><strong>{filteredEntries.length}</strong><span>{filteredEntries.length === 1 ? 'compra' : 'compras'}</span></div></div>
-    {filteredEntries.length ? <div className="item-price-history-list">{filteredEntries.map((entry) => <article key={`${entry.purchase.id}-${entry.item.id}`} className="history-item-row">
-      <span className="price-history-date"><b>{shortDate(entry.purchase.purchasedAt)}</b><small>{entry.purchase.marketName}</small></span>
-      <span className="price-history-variant"><b>{entry.item.variety || 'Sem variedade'}</b><small>{[entry.item.brand, `${Number(entry.item.packageSize) || 1} ${entry.item.packageUnit || 'un'}`].filter(Boolean).join(' · ')}</small></span>
-      <span className="price-history-value"><strong>{money(entry.unitPrice)}</strong>{Number(entry.item.quantity) !== 1 && <small>{entry.item.quantity} itens · total {money(entry.item.totalPrice)}</small>}</span>
-      <div className="history-item-actions">
-        <button type="button" className="history-action-btn" title="Ver compra completa" aria-label="Ver compra" onClick={() => onOpenModal?.({ type: 'purchase-detail', purchase: entry.purchase, backModal: listItem ? { type: 'item', item: listItem } : null })}><Store size={13}/><span>Ver compra</span></button>
-        <button type="button" className="history-action-btn" title="Editar este item da compra" aria-label="Editar item da compra" onClick={() => onOpenModal?.({ type: 'edit-purchase-item', purchase: entry.purchase, item: entry.item, backModal: listItem ? { type: 'item', item: listItem } : null })}><Pencil size={13}/><span>Editar item</span></button>
-      </div>
-    </article>)}</div> : <Empty icon={CircleDollarSign} title="Nenhum preço nesta variedade" text="Escolha outra variedade ou registre uma nova compra."/>}
+    {filteredEntries.length ? <div className="item-price-history-list">{filteredEntries.map((entry) => {
+      const originalName = entry.item.originalDescription || entry.item.importedProductName
+      return <article key={`${entry.purchase.id}-${entry.item.id}`} className="history-item-row">
+        <span className="price-history-date"><b>{shortDate(entry.purchase.purchasedAt)}</b><small>{entry.purchase.marketName}</small></span>
+        <span className="price-history-variant">
+          <b>{entry.item.variety || 'Sem variedade'}</b>
+          <small>{[entry.item.brand, `${Number(entry.item.packageSize) || 1} ${entry.item.packageUnit || 'un'}`].filter(Boolean).join(' · ')}</small>
+          {originalName && <small className="history-original-name" title={`Na nota fiscal: ${originalName}`}>Na nota: {originalName}</small>}
+        </span>
+        <span className="price-history-value"><strong>{money(entry.unitPrice)}</strong>{Number(entry.item.quantity) !== 1 && <small>{entry.item.quantity} itens · total {money(entry.item.totalPrice)}</small>}</span>
+        <div className="history-item-actions">
+          <button type="button" className="history-action-btn" title="Ver compra completa" aria-label="Ver compra" onClick={() => onOpenModal?.({ type: 'purchase-detail', purchase: entry.purchase, backModal: listItem ? { type: 'item', item: listItem } : null })}><Store size={13}/><span>Ver compra</span></button>
+          <button type="button" className="history-action-btn" title="Editar este item da compra" aria-label="Editar item da compra" onClick={() => onOpenModal?.({ type: 'edit-purchase-item', purchase: entry.purchase, item: entry.item, backModal: listItem ? { type: 'item', item: listItem } : null })}><Pencil size={13}/><span>Editar item</span></button>
+        </div>
+      </article>
+    })}</div> : <Empty icon={CircleDollarSign} title="Nenhum preço nesta variedade" text="Escolha outra variedade ou registre uma nova compra."/>}
   </Modal>
 }
 
@@ -741,6 +777,7 @@ function VariantDetailModal({ product, variant, state, onClose, onEditVariant, o
           {stats.history.map(({ purchase, item }) => {
             const unitPrice = Number(item.unitPrice) || Number(item.totalPrice) / (Number(item.quantity) || 1)
             const normalized = normalizedPrice(item)
+            const originalName = item.originalDescription || item.importedProductName
             return (
               <article key={`${purchase.id}-${item.id}`} className="history-item-row">
                 <span className="price-history-date">
@@ -749,6 +786,7 @@ function VariantDetailModal({ product, variant, state, onClose, onEditVariant, o
                 </span>
                 <span className="price-history-variant">
                   <b>{item.quantity} × {item.packageSize} {item.packageUnit}</b>
+                  {originalName && <small className="history-original-name" title={`Na nota fiscal: ${originalName}`}>Na nota: {originalName}</small>}
                   {normalized && <small>{money(normalized.value)} / {normalized.unit}</small>}
                 </span>
                 <span className="price-history-value">
@@ -918,6 +956,7 @@ function VariantEditModal({ product, initialVariant, state, onSave, onDelete, on
 
 function ProductDetailPanel({ product, state, onClose, onEdit, onOpenModal }) {
   const [selectedVariant, setSelectedVariant] = useState(null)
+  const [showAllPurchases, setShowAllPurchases] = useState(false)
   const variants = normalizeProductVariants(product.variants)
   const history = purchaseHistoryFor(state, product.name)
   const frequency = periodicityInfo(state, product)
@@ -1029,14 +1068,16 @@ function ProductDetailPanel({ product, state, onClose, onEdit, onOpenModal }) {
       <header><div><h3>Histórico recente de compras</h3><p>{latest ? `Última compra em ${shortDate(latest.purchase.purchasedAt)}` : 'Ainda não há compras registradas.'}</p></div></header>
       {history.length ? (
         <div className="product-detail-history">
-          {history.slice(0, 10).map(({ purchase, item }) => {
+          {(showAllPurchases ? history : history.slice(0, 10)).map(({ purchase, item }) => {
             const normalized = normalizedPrice(item)
             const variantTag = [item.variety, item.brand, `${item.packageSize} ${item.packageUnit}`].filter(Boolean).join(' · ')
+            const originalName = item.originalDescription || item.importedProductName
             return (
               <article key={`${purchase.id}-${item.id}`} className="product-detail-history-row">
                 <div className="product-detail-history-info">
                   <b>{purchase.marketName}</b>
                   <small>{shortDate(purchase.purchasedAt)} · <span className="history-variant-tag">{variantTag || 'Sem variação'}</span></small>
+                  {originalName && <small className="history-original-name" title={`Na nota fiscal: ${originalName}`}>Na nota: {originalName}</small>}
                   {normalized && <em>{money(normalized.value)} / {normalized.unit}</em>}
                 </div>
                 <div className="product-detail-history-side">
@@ -1067,6 +1108,16 @@ function ProductDetailPanel({ product, state, onClose, onEdit, onOpenModal }) {
               </article>
             )
           })}
+          {history.length > 10 && (
+            <button
+              type="button"
+              className="ghost"
+              style={{ width: '100%', marginTop: '6px', justifyContent: 'center' }}
+              onClick={() => setShowAllPurchases((prev) => !prev)}
+            >
+              {showAllPurchases ? 'Mostrar menos compras' : `Ver todas as compras (${history.length})`}
+            </button>
+          )}
         </div>
       ) : (
         <p className="product-detail-empty">Os preços e mercados aparecerão aqui depois da primeira compra.</p>
@@ -1236,7 +1287,7 @@ function ProductPanel({ product: initial, initialVariantId, state, onClose, onSa
 
           <details className="item-edit-section history-section">
             <summary><span><b>Histórico de compras do produto</b><small>{history.length} {history.length === 1 ? 'registro' : 'registros'}</small></span><ChevronRight size={18}/></summary>
-            <div className="item-edit-section-body">{history.length ? <div className="item-history">{history.map(({ purchase, item: bought }) => { const normalized = normalizedPrice(bought); const originalName = bought.originalDescription || bought.importedProductName; const variantTag = [bought.variety, bought.brand, `${bought.packageSize} ${bought.packageUnit}`].filter(Boolean).join(' · '); return <article key={`${purchase.id}-${bought.id}`}><div><b>{shortDate(purchase.purchasedAt)} · {purchase.marketName}</b><small><span className="history-variant-tag">{variantTag || 'Sem sabor/tipo ou marca'}</span> · {bought.quantity} un.</small>{originalName && <small className="history-original-name">Na nota: {originalName}</small>}{normalized && <em>{money(normalized.value)} / {normalized.unit}</em>}</div><strong>{money(bought.totalPrice)}</strong></article> })}</div> : <p className="collapsed-empty">Nenhuma compra anterior encontrada para {initial.name}.</p>}</div>
+            <div className="item-edit-section-body">{history.length ? <div className="item-history">{history.map(({ purchase, item: bought }) => { const normalized = normalizedPrice(bought); const originalName = bought.originalDescription || bought.importedProductName; const variantTag = [bought.variety, bought.brand, `${bought.packageSize} ${bought.packageUnit}`].filter(Boolean).join(' · '); return <article key={`${purchase.id}-${bought.id}`}><div><b>{shortDate(purchase.purchasedAt)} · {purchase.marketName}</b><small><span className="history-variant-tag">{variantTag || 'Sem sabor/tipo ou marca'}</span> · {bought.quantity} un.</small>{originalName && <small className="history-original-name" title={`Na nota fiscal: ${originalName}`}>Na nota: {originalName}</small>}{normalized && <em>{money(normalized.value)} / {normalized.unit}</em>}</div><strong>{money(bought.totalPrice)}</strong></article> })}</div> : <p className="collapsed-empty">Nenhuma compra anterior encontrada para {initial.name}.</p>}</div>
           </details>
 
           <div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary"><Check size={17}/> Salvar alterações</button></div>

@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app'
 import { browserLocalPersistence, getAuth, GoogleAuthProvider, setPersistence, signInWithPopup, signInWithRedirect } from 'firebase/auth'
-import { collection, deleteDoc, doc, enableIndexedDbPersistence, getDoc, getDocs, getFirestore, runTransaction, serverTimestamp, writeBatch } from 'firebase/firestore'
+import { collection, deleteDoc, doc, enableIndexedDbPersistence, getDoc, getDocs, getFirestore, onSnapshot, runTransaction, serverTimestamp, writeBatch } from 'firebase/firestore'
 import { mergeSyncedStates } from './sync'
 
 const config = {
@@ -151,4 +151,32 @@ export async function saveCloudState(userId, state, userProfile, baseState = {})
 
 export async function removeLegacyCloudState(userId) {
   await deleteDoc(doc(db, 'users', userId, 'app', 'state'))
+}
+
+export function subscribeCloudChanges(userId, onRemoteChange) {
+  if (!db || !userId) return () => {}
+
+  let timeout = null
+  const schedule = () => {
+    clearTimeout(timeout)
+    timeout = setTimeout(() => {
+      onRemoteChange()
+    }, 300)
+  }
+
+  const unsubList = onSnapshot(doc(db, 'users', userId, 'shoppingList', 'current'), (snapshot) => {
+    if (snapshot.metadata.hasPendingWrites) return
+    schedule()
+  }, (err) => console.warn('Erro listener shoppingList:', err))
+
+  const unsubPrefs = onSnapshot(doc(db, 'users', userId, 'app', 'preferences'), (snapshot) => {
+    if (snapshot.metadata.hasPendingWrites) return
+    schedule()
+  }, (err) => console.warn('Erro listener preferences:', err))
+
+  return () => {
+    clearTimeout(timeout)
+    unsubList()
+    unsubPrefs()
+  }
 }

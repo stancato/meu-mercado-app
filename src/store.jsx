@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { initialState, normalizeText, nowIso, STARTER_PRODUCTS } from './data'
-import { firebaseReady, loadCloudState, removeLegacyCloudState, saveCloudState } from './firebase'
+import { firebaseReady, loadCloudState, removeLegacyCloudState, saveCloudState, subscribeCloudChanges } from './firebase'
 import { mergeSyncedStates, stampListChanges } from './sync'
 
 const STORAGE_KEY = 'meu-mercado-state-v1'
@@ -152,6 +152,59 @@ export function StoreProvider({ user, children }) {
     return () => clearTimeout(timeout)
   }, [state, user])
 
+  const pullLatestFromCloud = useCallback(async (showStatus = true) => {
+    if (!user || !firebaseReady) return
+    if (showStatus) setSyncStatus('syncing')
+    return saveQueue.current = saveQueue.current.catch(() => {}).then(async () => {
+      const cloud = await loadCloudState(user.uid)
+      if (!cloud.hasData) {
+        if (showStatus) setSyncStatus('synced')
+        return
+      }
+      const cloudState = normalizeState(cloud.state)
+      const current = stateRef.current
+      const base = lastSyncedState.current || {}
+      const reconciled = normalizeState(mergeSyncedStates(base, current, cloudState))
+      lastSyncedState.current = cloudState
+      stateRef.current = reconciled
+      setState(reconciled)
+      const userStorageKey = `${STORAGE_KEY}-${user.uid}`
+      localStorage.setItem(userStorageKey, JSON.stringify(reconciled))
+      if (showStatus) setSyncStatus('synced')
+    }).catch((err) => {
+      console.warn('Erro ao atualizar da nuvem:', err)
+      if (showStatus) setSyncStatus('offline')
+    })
+  }, [user])
+
+  useEffect(() => {
+    if (!user || !firebaseReady) return
+    const unsubscribe = subscribeCloudChanges(user.uid, () => {
+      pullLatestFromCloud(true)
+    })
+    return () => {
+      if (unsubscribe) unsubscribe()
+    }
+  }, [user, pullLatestFromCloud])
+
+  useEffect(() => {
+    if (!user || !firebaseReady) return
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') pullLatestFromCloud(true)
+    }
+    const handleFocus = () => pullLatestFromCloud(true)
+    const handleOnline = () => pullLatestFromCloud(true)
+
+    document.addEventListener('visibilitychange', handleVisibility)
+    window.addEventListener('focus', handleFocus)
+    window.addEventListener('online', handleOnline)
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility)
+      window.removeEventListener('focus', handleFocus)
+      window.removeEventListener('online', handleOnline)
+    }
+  }, [user, pullLatestFromCloud])
+
   const mutate = useCallback((recipe) => {
     setState((current) => {
       const changedAt = nowIso()
@@ -159,7 +212,8 @@ export function StoreProvider({ user, children }) {
     })
   }, [])
 
-  const value = useMemo(() => ({ state, setState, mutate, syncStatus }), [state, mutate, syncStatus])
+  const syncNow = useCallback(() => pullLatestFromCloud(true), [pullLatestFromCloud])
+  const value = useMemo(() => ({ state, setState, mutate, syncStatus, syncNow }), [state, mutate, syncStatus, syncNow])
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
 }
 
