@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Apple, Archive, ArrowLeftRight, BarChart3, Bath, Beef, CalendarClock, Check, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, Eye, EyeOff, GitMerge, LayoutGrid, List, ListChecks, LogIn, LogOut, Milk, Minus, Moon, Package, PackageCheck, PackagePlus, PackageSearch, Pencil, Plus, ReceiptText, RotateCcw, Search, Settings, Share2, ShoppingBasket, SprayCan, Store, Sun, Tags, Trash2, TrendingUp, X } from 'lucide-react'
+import { AlertTriangle, Apple, Archive, ArrowLeftRight, BarChart3, Bath, Beef, CalendarClock, Camera, Check, CheckCircle2, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, Eye, EyeOff, FileJson, GitMerge, Globe, LayoutGrid, List, ListChecks, Loader2, LogIn, LogOut, Milk, Minus, Moon, Package, PackageCheck, PackagePlus, PackageSearch, Pencil, Plus, QrCode, ReceiptText, RotateCcw, Search, Settings, Share2, ShoppingBasket, Sparkles, SprayCan, Store, Sun, Tags, Trash2, TrendingUp, X } from 'lucide-react'
 import { signOut } from 'firebase/auth'
 import { auth, firebaseReady, loginWithGoogle } from './firebase'
-import { CATEGORIES, RECEIPT_PROMPT, UNITS, buildReceiptPrompt, dateTimeLocal, defaultUnitForProduct, mergeProductVariants, money, normalizeImport, normalizeProductVariants, normalizeText, normalizedPrice, nowIso, onlyDigits, parseJsonInput, promoteVariantToProduct, shortDate, suggestNewProductName, uid, updatePurchaseItem } from './data'
-import { Empty, Field, Modal, Toast } from './components'
+import { CATEGORIES, RECEIPT_PROMPT, UNITS, buildReceiptPrompt, buildReceiptPromptFromNfce, dateTimeLocal, defaultUnitForProduct, fetchNfceFromUrl, findDuplicateProductSuggestions, findMatchingVariant, mergeProductVariants, money, normalizeImport, normalizeProductVariants, normalizeText, normalizedPrice, nowIso, onlyDigits, parseJsonInput, parseNfceHtml, promoteVariantToProduct, shortDate, suggestNewProductName, uid, updatePurchaseItem } from './data'
+import { Empty, Field, Modal, SearchableSelect, Toast } from './components'
 import { useStore } from './store'
+import { QrScannerModal } from './QrScanner'
 
 const NAV = [
   ['lists', 'Lista', ListChecks], ['purchases', 'Compras', ReceiptText], ['prices', 'Analytics', BarChart3], ['products', 'Produtos', PackageSearch], ['settings', 'Ajustes', Settings],
@@ -101,7 +102,8 @@ export default function App({ user }) {
       setModal(null); setToast('Produto atualizado no catálogo.')
     }} />}
     {modal?.type === 'product-detail' && <ProductDetailPanel product={state.products.find((p) => p.id === modal.product.id) || modal.product} state={state} onClose={() => setModal(null)} onEdit={(opts) => setModal({ type: 'product', product: modal.product, ...opts })} onOpenModal={setModal} />}
-    {modal?.type === 'merge-products' && <ProductMergeModal initialLeft={modal.products[0]} initialRight={modal.products[1]} onClose={() => setModal(null)} onMerge={(plan) => { mutate((current) => mergeCatalogProducts(current, plan)); setModal(null); setToast('Produtos normalizados e histórico atualizado.') }} />}
+    {modal?.type === 'merge-suggestions' && <MergeSuggestionsModal state={state} onClose={() => setModal(null)} onMergePair={(p1, p2) => setModal({ type: 'merge-products', products: [p1, p2], backModal: { type: 'merge-suggestions' } })} />}
+    {modal?.type === 'merge-products' && <ProductMergeModal initialLeft={modal.products[0]} initialRight={modal.products[1]} onClose={() => setModal(modal.backModal || null)} onMerge={(plan) => { mutate((current) => mergeCatalogProducts(current, plan)); setModal(modal.backModal || null); setToast('Produtos normalizados e histórico atualizado.') }} />}
     {modal?.type === 'merge-variants' && <VariantMergeModal product={state.products.find((p) => p.id === modal.product.id) || modal.product} initialSourceVariant={modal.variant} state={state} onClose={() => setModal(null)} onMerge={(plan) => { mutate((current) => mergeProductVariants(current, plan)); setModal(null); setToast('Variações unificadas e histórico atualizado.') }} />}
     {modal?.type === 'variant-to-product' && <VariantToProductModal product={state.products.find((p) => p.id === modal.product.id) || modal.product} variant={modal.variant} state={state} onClose={() => setModal(null)} onPromote={(plan) => { mutate((current) => promoteVariantToProduct(current, plan)); setModal(null); setToast('Variação transformada em produto com sucesso.') }} />}
     {modal?.type === 'import' && <ImportModal products={state.products} toast={setToast} onClose={() => setModal(null)} onReview={(draft) => setModal({ type: 'review', draft: prepareDraftProductMatches({ ...draft, source: 'json' }, state.products, state.productMappings) })} onOpenPrompt={() => setModal({ type: 'prompt', initialWithCatalog: true })} />}
@@ -399,6 +401,7 @@ function ProductsPage({ state, mutate, open }) {
   })
   useEffect(() => localStorage.setItem('products-grouping', productGrouping), [productGrouping])
   useEffect(() => setSelected((current) => current.filter((id) => state.products.some((product) => product.id === id && !product.archivedAt))), [state.products])
+  const duplicateSuggestions = useMemo(() => findDuplicateProductSuggestions(state.products), [state.products])
   const products = state.products
     .filter((p) => !p.archivedAt && normalizeText(`${p.name} ${(p.brands || []).join(' ')}`).includes(normalizeText(query)))
     .sort((first, second) => first.name.localeCompare(second.name, 'pt-BR', { sensitivity: 'base' }))
@@ -444,7 +447,12 @@ function ProductsPage({ state, mutate, open }) {
     <div className="product-catalog-controls">
       <div className="catalog-tools">
         <div className="search"><Search size={18}/><input placeholder="Produto ou marca" value={query} onChange={(e) => setQuery(e.target.value)}/>{query && <button className="search-clear" aria-label="Limpar busca de produtos" title="Limpar busca" onClick={() => setQuery('')}><X size={17}/></button>}</div>
-        <div className="catalog-actions"><button className={`group-toggle ${productGrouping === 'category' ? 'active' : ''}`} aria-label="Agrupar produtos por categoria" title="Agrupar por categoria" aria-pressed={productGrouping === 'category'} onClick={() => setProductGrouping((current) => current === 'category' ? '' : 'category')}><Tags size={16}/><span>Agrupar por categoria</span></button><button className={`group-toggle ${productGrouping === 'periodicity' ? 'active' : ''}`} aria-label="Agrupar produtos por periodicidade" title="Agrupar por periodicidade" aria-pressed={productGrouping === 'periodicity'} onClick={() => setProductGrouping((current) => current === 'periodicity' ? '' : 'periodicity')}><CalendarClock size={16}/><span>Agrupar por periodicidade</span></button><button className="ghost select-visible" aria-label={allVisibleSelected ? 'Desmarcar produtos visíveis' : 'Selecionar produtos visíveis'} title={allVisibleSelected ? 'Desmarcar visíveis' : 'Selecionar visíveis'} onClick={() => setSelected(allVisibleSelected ? selected.filter((id) => !products.some((product) => product.id === id)) : [...new Set([...selected, ...products.map((product) => product.id)])])}><Check size={16}/><span>{allVisibleSelected ? 'Desmarcar visíveis' : 'Selecionar visíveis'}</span></button></div>
+        <div className="catalog-actions">
+          <button className={`group-toggle find-duplicates-btn ${duplicateSuggestions.length > 0 ? 'has-badge' : ''}`} aria-label="Identificar repetições e sugerir mesclagens" title="Identificar repetições e sugerir mesclagens" onClick={() => open({ type: 'merge-suggestions' })}><Sparkles size={16}/><span>Identificar repetições</span>{duplicateSuggestions.length > 0 && <span className="duplicates-badge">{duplicateSuggestions.length}</span>}</button>
+          <button className={`group-toggle ${productGrouping === 'category' ? 'active' : ''}`} aria-label="Agrupar produtos por categoria" title="Agrupar por categoria" aria-pressed={productGrouping === 'category'} onClick={() => setProductGrouping((current) => current === 'category' ? '' : 'category')}><Tags size={16}/><span>Agrupar por categoria</span></button>
+          <button className={`group-toggle ${productGrouping === 'periodicity' ? 'active' : ''}`} aria-label="Agrupar produtos por periodicidade" title="Agrupar por periodicidade" aria-pressed={productGrouping === 'periodicity'} onClick={() => setProductGrouping((current) => current === 'periodicity' ? '' : 'periodicity')}><CalendarClock size={16}/><span>Agrupar por periodicidade</span></button>
+          <button className="ghost select-visible" aria-label={allVisibleSelected ? 'Desmarcar produtos visíveis' : 'Selecionar produtos visíveis'} title={allVisibleSelected ? 'Desmarcar visíveis' : 'Selecionar visíveis'} onClick={() => setSelected(allVisibleSelected ? selected.filter((id) => !products.some((product) => product.id === id)) : [...new Set([...selected, ...products.map((product) => product.id)])])}><Check size={16}/><span>{allVisibleSelected ? 'Desmarcar visíveis' : 'Selecionar visíveis'}</span></button>
+        </div>
       </div>
       {selected.length > 0 && <div className="bulk-periodicity"><div className="bulk-selection-label"><span><b>{selected.length}</b> selecionados</span><button className="clear-selection" aria-label="Limpar seleção" title="Limpar seleção" onClick={() => setSelected([])}><X size={18}/></button></div>{selected.length === 2 && <button className="secondary" onClick={() => open({ type: 'merge-products', products: selected.map((id) => state.products.find((product) => product.id === id)) })}><GitMerge size={16}/> Normalizar / fundir</button>}<select aria-label="Periodicidade para os produtos selecionados" value={bulkPeriodicity} onChange={(event) => setBulkPeriodicity(event.target.value)}>{PERIODICITY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><button className="primary" onClick={() => { setProductPeriodicity(selected, bulkPeriodicity); setSelected([]) }}>Aplicar ao grupo</button></div>}
     </div>
@@ -526,7 +534,7 @@ function InlineProductSearch({ products, list, state, onAdd, topBar = null }) {
           <div className="results-grid">
             {results.map((product) => <SuggestionButton key={product.id} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add}/>)}
           </div>
-        </> : suggestionGroups.map((group) => <section className="suggestion-group" key={group.id}><header><b>{group.label}</b><button onPointerDown={(e) => e.preventDefault()} onClick={() => addGroup(group.products)}>Adicionar todos</button></header><div className="results-grid">{group.products.map((product) => <SuggestionButton key={product.id} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add}/>)}</div></section>)}
+        </> : suggestionGroups.map((group) => <section className="suggestion-group" key={group.id}><header><b>{group.label}</b><button onPointerDown={(e) => e.preventDefault()} onClick={() => addGroup(group.products)}>Adicionar todos</button></header><div className="suggestion-carousel">{group.products.map((product) => <SuggestionCard key={product.id} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add}/>)}</div></section>)}
         {query.trim() && !hasExactProduct && <button className="custom-product category-outros" onPointerDown={(e) => e.preventDefault()} onClick={() => add({ id: uid(), name: query.trim(), category: 'Outros', defaultUnit: 'un', brands: [], variants: [] })}><CategoryIcon category="Outros" size={18}/><span className="grow"><span className="new-title"><b>Criar “{query.trim()}”</b><em>Novo</em></span></span><Plus size={18}/></button>}
         {!results.length && !variantResults.length && !query.trim() && !suggestionGroups.length && <p className="autocomplete-empty">Registre uma compra para começarmos a prever quando os produtos vão faltar.</p>}
         {!results.length && !variantResults.length && query.trim() && <p className="autocomplete-empty">Nenhum produto cadastrado encontrado com este nome.</p>}
@@ -534,11 +542,44 @@ function InlineProductSearch({ products, list, state, onAdd, topBar = null }) {
   </div>
 }
 
+function SuggestionCard({ product, alreadyAdded = false, onAdd }) {
+  const variants = normalizeProductVariants(product.variants)
+  const mainVariant = variants[0]
+  const variantSubtitle = mainVariant ? [mainVariant.variety, mainVariant.brand].filter(Boolean).join(' · ') : null
+  const unit = product.defaultUnit || defaultUnitForProduct(product.name, product.category)
+
+  return (
+    <button
+      className={`suggestion-card category-${categoryKey(product.category)} ${alreadyAdded ? 'added' : ''}`}
+      role="option"
+      aria-selected={alreadyAdded}
+      disabled={alreadyAdded}
+      onPointerDown={(event) => event.preventDefault()}
+      onClick={() => onAdd(product)}
+      title={alreadyAdded ? `${product.name} (já na lista)` : `Adicionar ${product.name}`}
+    >
+      <div className="suggestion-card-top">
+        <CategoryIcon category={product.category} size={20} />
+        <span className="suggestion-card-action">
+          {alreadyAdded ? <Check size={14} /> : <Plus size={15} />}
+        </span>
+      </div>
+      <div className="suggestion-card-content">
+        <strong className="suggestion-card-name">{product.name}</strong>
+        {variantSubtitle && <small className="suggestion-card-sub">{variantSubtitle}</small>}
+      </div>
+      <div className="suggestion-card-footer">
+        <span className="suggestion-card-unit">{unit}</span>
+        {alreadyAdded && <span className="suggestion-card-badge">Na lista</span>}
+      </div>
+    </button>
+  )
+}
+
 function SuggestionButton({ product, alreadyAdded = false, onAdd, variant = false }) {
   const selected = product.selectedVariant
   const variantLabel = variant ? [selected?.variety, selected?.brand].filter(Boolean).join(' · ') : null
-  const label = variantLabel ? `${product.name} · ${variantLabel}` : product.name
-  return <button className={`category-${categoryKey(product.category)} ${variant ? 'variant-result' : ''}`} role="option" aria-selected={alreadyAdded} disabled={alreadyAdded} onPointerDown={(event) => event.preventDefault()} onClick={() => onAdd(product)}><CategoryIcon category={product.category} size={18}/><span className="suggestion-text"><b>{label}</b></span>{alreadyAdded ? <span className="added-label"><Check size={14}/></span> : <Plus size={16} className="suggestion-add-icon"/>}</button>
+  return <button className={`category-${categoryKey(product.category)} ${variant ? 'variant-result' : ''}`} role="option" aria-selected={alreadyAdded} disabled={alreadyAdded} onPointerDown={(event) => event.preventDefault()} onClick={() => onAdd(product)}><CategoryIcon category={product.category} size={18}/><span className="suggestion-text"><b>{product.name}</b>{variantLabel && <small>{variantLabel}</small>}</span>{alreadyAdded ? <span className="added-label"><Check size={14}/></span> : <Plus size={16} className="suggestion-add-icon"/>}</button>
 }
 
 function ItemPanel({ item: initial, state, onClose, onSave, onDelete, onEditProduct, onOpenModal }) {
@@ -1529,6 +1570,158 @@ function VariantToProductModal({ product, variant, state, onClose, onPromote }) 
   )
 }
 
+function MergeSuggestionsModal({ state, onClose, onMergePair }) {
+  const [dismissedPairIds, setDismissedPairIds] = useState(new Set())
+  const [filterConfidence, setFilterConfidence] = useState('all')
+
+  const suggestions = useMemo(() => {
+    const raw = findDuplicateProductSuggestions(state.products, { dismissedPairIds })
+    if (filterConfidence === 'high') {
+      return raw.filter((s) => s.confidence === 'high')
+    }
+    return raw
+  }, [state.products, dismissedPairIds, filterConfidence])
+
+  const dismissSuggestion = (pairId) => {
+    setDismissedPairIds((prev) => new Set([...prev, pairId]))
+  }
+
+  return (
+    <Modal
+      title="Identificar repetições"
+      subtitle="Sugestões automáticas de produtos repetidos ou com variações para unificar."
+      onClose={onClose}
+    >
+      <div className="merge-suggestions-container">
+        {suggestions.length > 0 && (
+          <div className="suggestions-meta-bar">
+            <span className="suggestions-count-badge">
+              <Sparkles size={14} />
+              <b>{suggestions.length}</b> {suggestions.length === 1 ? 'sugestão encontrada' : 'sugestões encontradas'}
+            </span>
+            <div className="suggestions-filter-tabs">
+              <button
+                type="button"
+                className={`filter-tab ${filterConfidence === 'all' ? 'active' : ''}`}
+                onClick={() => setFilterConfidence('all')}
+              >
+                Todas
+              </button>
+              <button
+                type="button"
+                className={`filter-tab ${filterConfidence === 'high' ? 'active' : ''}`}
+                onClick={() => setFilterConfidence('high')}
+              >
+                Alta similaridade
+              </button>
+            </div>
+          </div>
+        )}
+
+        {suggestions.length === 0 ? (
+          <div className="suggestions-empty-state">
+            <div className="suggestions-empty-icon">
+              <CheckCircle2 size={38} />
+            </div>
+            <h3>Nenhuma repetição encontrada</h3>
+            <p>
+              {dismissedPairIds.size > 0
+                ? 'Todas as sugestões foram revisadas ou mescladas.'
+                : 'Seu catálogo de produtos está organizado e sem duplicidades identificadas.'}
+            </p>
+            {dismissedPairIds.size > 0 && (
+              <button
+                type="button"
+                className="secondary btn-sm"
+                onClick={() => setDismissedPairIds(new Set())}
+              >
+                <RotateCcw size={14} /> Restaurar sugestões dispensadas ({dismissedPairIds.size})
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="suggestions-list">
+            {suggestions.map((suggestion) => {
+              const [left, right] = suggestion.products
+              const leftVars = normalizeProductVariants(left.variants)
+              const rightVars = normalizeProductVariants(right.variants)
+
+              return (
+                <div className="suggestion-card" key={suggestion.id}>
+                  <div className="suggestion-header">
+                    <span className={`confidence-tag confidence-${suggestion.confidence}`}>
+                      {suggestion.confidence === 'high' ? 'Alta similaridade' : 'Similaridade moderada'}
+                    </span>
+                    <span className="suggestion-reason">{suggestion.reason}</span>
+                  </div>
+
+                  <div className="suggestion-comparison">
+                    <div className="suggestion-product-box main-box">
+                      <div className="suggestion-product-badge">Principal (Manter)</div>
+                      <b className="suggestion-product-name">{left.name}</b>
+                      <div className="suggestion-product-details">
+                        <span className={`product-pill category-${categoryKey(left.category)}`}>
+                          <CategoryIcon category={left.category} size={13} /> {left.category || 'Outros'}
+                        </span>
+                        <span className="product-pill">{left.defaultUnit || 'un'}</span>
+                        {leftVars.length > 0 && (
+                          <span className="product-pill">{leftVars.length} {leftVars.length === 1 ? 'variação' : 'variações'}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="suggestion-divider">
+                      <ArrowLeftRight size={16} />
+                    </div>
+
+                    <div className="suggestion-product-box absorb-box">
+                      <div className="suggestion-product-badge">Absorver (Fundir)</div>
+                      <b className="suggestion-product-name">{right.name}</b>
+                      <div className="suggestion-product-details">
+                        <span className={`product-pill category-${categoryKey(right.category)}`}>
+                          <CategoryIcon category={right.category} size={13} /> {right.category || 'Outros'}
+                        </span>
+                        <span className="product-pill">{right.defaultUnit || 'un'}</span>
+                        {rightVars.length > 0 && (
+                          <span className="product-pill">{rightVars.length} {rightVars.length === 1 ? 'variação' : 'variações'}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="suggestion-actions">
+                    <button
+                      type="button"
+                      className="secondary suggestion-dismiss-btn"
+                      onClick={() => dismissSuggestion(suggestion.id)}
+                      title="Dispensar sugestão"
+                    >
+                      <X size={15} /> Não mesclar
+                    </button>
+                    <button
+                      type="button"
+                      className="primary suggestion-merge-btn"
+                      onClick={() => onMergePair(left, right)}
+                    >
+                      <GitMerge size={15} /> Mesclar produtos
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <div className="modal-actions">
+          <button type="button" className="secondary" onClick={onClose}>
+            Fechar
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 function ProductMergeModal({ initialLeft, initialRight, onClose, onMerge }) {
   const [left, setLeft] = useState(initialLeft)
   const [right, setRight] = useState(initialRight)
@@ -1660,37 +1853,292 @@ function ProductMergeModal({ initialLeft, initialRight, onClose, onMerge }) {
 }
 
 function ImportModal({ products = [], onClose, onReview, toast, onOpenPrompt }) {
+  const [tab, setTab] = useState('nfce') // 'nfce' | 'json'
+  const [url, setUrl] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [loadingStep, setLoadingStep] = useState('')
+  const [nfceData, setNfceData] = useState(null)
+  const [showScanner, setShowScanner] = useState(false)
   const [text, setText] = useState('')
   const [error, setError] = useState('')
   const [includeCatalog, setIncludeCatalog] = useState(true)
 
   const readFile = (file) => file?.text().then(setText)
-  const copyPrompt = () => {
+
+  const copyGeneralPrompt = () => {
     const prompt = buildReceiptPrompt(products, { includeCatalog })
     return copyText(prompt)
       .then(() => toast(includeCatalog ? 'Prompt com catálogo copiado.' : 'Prompt copiado.'))
       .catch(() => setError('Não foi possível copiar o prompt.'))
   }
 
-  return <Modal title="Importar nota em JSON" subtitle="Nada será salvo antes da sua revisão." onClose={onClose} wide>
-    <div className="import-prompt-callout">
-      <div className="grow">
-        <b>Primeiro gere o JSON</b>
-        <small>Anexe a foto da nota à IA e use o prompt no formato esperado.</small>
-        <label className="import-prompt-checkbox">
-          <input type="checkbox" checked={includeCatalog} onChange={(e) => setIncludeCatalog(e.target.checked)} />
-          <span>Incluir catálogo ({products.length} produtos e variações)</span>
-        </label>
-      </div>
-      <div className="import-prompt-actions">
-        <button type="button" className="secondary" onClick={copyPrompt} title="Copiar prompt"><ClipboardCopy size={17}/> Copiar prompt</button>
-        {onOpenPrompt && <button type="button" className="ghost" onClick={onOpenPrompt} title="Ver prompt completo">Ver prompt</button>}
-      </div>
-    </div>
-    <Field label="Cole o JSON gerado pela IA"><textarea className="json-input" value={text} onChange={(e) => { setText(e.target.value); setError('') }} placeholder='{ "mercado": ..., "itens": [...] }'/></Field>
-    <div className="file-row"><input type="file" accept="application/json,.json" onChange={(e) => readFile(e.target.files[0])}/></div>{error && <p className="error">{error}</p>}
-    <div className="modal-actions"><button className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={!text.trim()} onClick={() => { try { onReview(normalizeImport(parseJsonInput(text))) } catch (e) { setError(e.message || 'JSON inválido.') } }}>Revisar importação</button></div>
-  </Modal>
+  const handleFetchNfce = async (targetUrl) => {
+    const queryUrl = (targetUrl || url).trim()
+    if (!queryUrl) {
+      setError('Por favor, informe a URL da nota fiscal.')
+      return
+    }
+    setError('')
+    setLoading(true)
+    setLoadingStep('Buscando nota na SEFAZ...')
+    try {
+      const html = await fetchNfceFromUrl(queryUrl)
+      setLoadingStep('Extraindo produtos e valores...')
+      const parsed = parseNfceHtml(html)
+      setNfceData(parsed)
+      toast('Nota fiscal carregada com sucesso!')
+    } catch (err) {
+      setError(err.message || 'Erro ao carregar dados da nota fiscal.')
+      setNfceData(null)
+    } finally {
+      setLoading(false)
+      setLoadingStep('')
+    }
+  }
+
+  const handleQrScanned = (scanned) => {
+    setShowScanner(false)
+    setUrl(scanned)
+    handleFetchNfce(scanned)
+  }
+
+  const handleDirectReview = () => {
+    if (!nfceData) return
+    try {
+      onReview(normalizeImport(nfceData))
+    } catch (err) {
+      setError(err.message || 'Erro ao processar dados da nota.')
+    }
+  }
+
+  const handleCopyNfcePrompt = () => {
+    if (!nfceData) return
+    const prompt = buildReceiptPromptFromNfce(nfceData, products, { includeCatalog })
+    copyText(prompt)
+      .then(() => toast('Prompt com os dados da nota copiado!'))
+      .catch(() => setError('Não foi possível copiar o prompt.'))
+  }
+
+  return (
+    <>
+      <Modal title="Importar Nota Fiscal" subtitle="Importe via QR Code, link da Fazenda ou JSON gerado por IA." onClose={onClose} wide>
+        {/* Abas de Navegação */}
+        <div className="import-tabs">
+          <button
+            type="button"
+            className={`import-tab-btn ${tab === 'nfce' ? 'active' : ''}`}
+            onClick={() => { setTab('nfce'); setError('') }}
+          >
+            <QrCode size={18} />
+            <span>QR Code / Link da Nota</span>
+          </button>
+          <button
+            type="button"
+            className={`import-tab-btn ${tab === 'json' ? 'active' : ''}`}
+            onClick={() => { setTab('json'); setError('') }}
+          >
+            <FileJson size={18} />
+            <span>Colar JSON da IA</span>
+          </button>
+        </div>
+
+        {tab === 'nfce' && (
+          <div className="nfce-import-container">
+            {/* Botão de Câmera / QR Code */}
+            <div className="qr-trigger-card">
+              <div className="grow">
+                <b>Escanear com a Câmera</b>
+                <small>Aponte a câmera do celular para o QR Code impresso no cupom fiscal.</small>
+              </div>
+              <button
+                type="button"
+                className="primary qr-camera-btn"
+                onClick={() => setShowScanner(true)}
+              >
+                <Camera size={18} />
+                <span>Abrir câmera</span>
+              </button>
+            </div>
+
+            <div className="import-divider">
+              <span>ou cole o link da nota fiscal</span>
+            </div>
+
+            {/* Campo de URL */}
+            <Field label="URL da NFC-e (SEFAZ SP ou portal estadual)">
+              <div className="nfce-url-input-group">
+                <input
+                  type="url"
+                  value={url}
+                  onChange={(e) => { setUrl(e.target.value); setError('') }}
+                  placeholder="https://www.nfce.fazenda.sp.gov.br/..."
+                  disabled={loading}
+                />
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => handleFetchNfce(url)}
+                  disabled={loading || !url.trim()}
+                >
+                  {loading ? <Loader2 size={16} className="spin" /> : <Globe size={16} />}
+                  <span>{loading ? 'Buscando...' : 'Buscar nota'}</span>
+                </button>
+              </div>
+            </Field>
+
+            {loading && (
+              <div className="nfce-loading-card">
+                <Loader2 size={24} className="spin" />
+                <span>{loadingStep || 'Carregando dados da nota...'}</span>
+              </div>
+            )}
+
+            {error && <p className="error">{error}</p>}
+
+            {/* Resultado da Nota Extraída */}
+            {nfceData && !loading && (
+              <div className="nfce-result-card">
+                <div className="nfce-result-header">
+                  <div className="nfce-result-store">
+                    <Store size={20} />
+                    <div>
+                      <b>{nfceData.mercado?.nome || 'Mercado identificado'}</b>
+                      <small>
+                        {nfceData.mercado?.cnpj ? `CNPJ: ${nfceData.mercado.cnpj}` : ''}
+                        {nfceData.compra?.data ? ` · ${shortDate(nfceData.compra.data)}` : ''}
+                      </small>
+                    </div>
+                  </div>
+                  <div className="nfce-result-total">
+                    <small>{nfceData.itens?.length || 0} itens</small>
+                    <strong>{money(nfceData.compra?.valorTotal || 0)}</strong>
+                  </div>
+                </div>
+
+                <div className="nfce-options-box">
+                  <label className="import-prompt-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={includeCatalog}
+                      onChange={(e) => setIncludeCatalog(e.target.checked)}
+                    />
+                    <span>Incluir catálogo de produtos ({products.length} itens)</span>
+                  </label>
+                </div>
+
+                <div className="nfce-actions-grid">
+                  <button
+                    type="button"
+                    className="primary action-btn-highlight"
+                    onClick={handleDirectReview}
+                  >
+                    <CheckCircle2 size={18} />
+                    <div className="btn-text-block">
+                      <b>Revisar compra</b>
+                      <small>Importar itens diretamente para conferência</small>
+                    </div>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="secondary action-btn-highlight"
+                    onClick={handleCopyNfcePrompt}
+                  >
+                    <Sparkles size={18} />
+                    <div className="btn-text-block">
+                      <b>Copiar Prompt para IA</b>
+                      <small>Padronizar nomes e variedades com IA</small>
+                    </div>
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div className="modal-actions">
+              <button type="button" className="secondary" onClick={onClose}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
+
+        {tab === 'json' && (
+          <div className="json-import-container">
+            <div className="import-prompt-callout">
+              <div className="grow">
+                <b>Primeiro gere o JSON</b>
+                <small>Anexe a foto da nota à IA e use o prompt no formato esperado.</small>
+                <label className="import-prompt-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={includeCatalog}
+                    onChange={(e) => setIncludeCatalog(e.target.checked)}
+                  />
+                  <span>Incluir catálogo ({products.length} produtos e variações)</span>
+                </label>
+              </div>
+              <div className="import-prompt-actions">
+                <button type="button" className="secondary" onClick={copyGeneralPrompt} title="Copiar prompt">
+                  <ClipboardCopy size={17} /> Copiar prompt
+                </button>
+                {onOpenPrompt && (
+                  <button type="button" className="ghost" onClick={onOpenPrompt} title="Ver prompt completo">
+                    Ver prompt
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <Field label="Cole o JSON gerado pela IA">
+              <textarea
+                className="json-input"
+                value={text}
+                onChange={(e) => {
+                  setText(e.target.value)
+                  setError('')
+                }}
+                placeholder='{ "mercado": ..., "itens": [...] }'
+              />
+            </Field>
+
+            <div className="file-row">
+              <input type="file" accept="application/json,.json" onChange={(e) => readFile(e.target.files[0])} />
+            </div>
+
+            {error && <p className="error">{error}</p>}
+
+            <div className="modal-actions">
+              <button type="button" className="secondary" onClick={onClose}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="primary"
+                disabled={!text.trim()}
+                onClick={() => {
+                  try {
+                    onReview(normalizeImport(parseJsonInput(text)))
+                  } catch (e) {
+                    setError(e.message || 'JSON inválido.')
+                  }
+                }}
+              >
+                Revisar importação
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Modal da Câmera / Leitor de QR Code */}
+      {showScanner && (
+        <QrScannerModal
+          onScan={handleQrScanned}
+          onClose={() => setShowScanner(false)}
+        />
+      )}
+    </>
+  )
 }
 
 function ManualPurchaseModal({ markets, onClose, onReview }) { const [market, setMarket] = useState({ name: '', cnpj: '', legalName: '', address: '' }); const [date, setDate] = useState(dateTimeLocal()); const [items, setItems] = useState([]); const add = () => setItems([...items, { id: uid(), productName: '', variety: '', brand: '', category: 'Outros', quantity: 1, packageSize: 1, packageUnit: 'un', unitPrice: 0, totalPrice: 0, originalDescription: '', barcode: '' }]); return <Modal title="Registrar compra manual" subtitle="Adicione os itens e revise antes de salvar." onClose={onClose} wide><div className="form-grid"><Field label="Mercado"><input value={market.name} onChange={(e) => setMarket({ ...market, name: e.target.value })} list="markets" placeholder="Nome do mercado"/><datalist id="markets">{markets.map((m) => <option key={m.id} value={m.name}/>)}</datalist></Field><Field label="Data"><input type="datetime-local" value={date} onChange={(e) => setDate(e.target.value)}/></Field></div><Field label="CNPJ (opcional)"><input value={market.cnpj} onChange={(e) => setMarket({ ...market, cnpj: e.target.value })}/></Field><EditableItems items={items} setItems={setItems}/><button className="secondary full" onClick={add}><Plus size={17}/> Adicionar item</button><div className="modal-actions"><button className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={!market.name || !items.length} onClick={() => onReview({ market: { ...market, cnpj: onlyDigits(market.cnpj) }, purchasedAt: new Date(date).toISOString(), items })}>Revisar compra</button></div></Modal> }
@@ -1699,6 +2147,7 @@ function ReviewModal({ draft: initial, products, onClose, onSave }) {
   const [draft, setDraft] = useState(initial)
   const [itemFilter, setItemFilter] = useState('all')
   const [filteredItemIds, setFilteredItemIds] = useState([])
+  const [showExitConfirm, setShowExitConfirm] = useState(false)
   const total = draft.items.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0)
   const issueCount = draft.items.filter((item) => itemIssues(item).length).length
   const existingCount = draft.items.filter((item) => findCatalogProduct(products, item)).length
@@ -1719,28 +2168,39 @@ function ReviewModal({ draft: initial, products, onClose, onSave }) {
     setItemFilter(value)
     setFilteredItemIds(value === 'all' ? [] : draft.items.filter((item) => reviewItemMatchesFilter(products, item, value)).map((item) => item.id))
   }
-  return <Modal title="Revise a compra" subtitle="Confirme produtos, marcas, embalagens e valores." onClose={onClose} wide>
-    <div className="review-market"><Store/><div className="grow"><b>{draft.market.name || 'Mercado não identificado'}</b><small>{draft.market.cnpj ? `CNPJ ${draft.market.cnpj}` : 'CNPJ não informado'} · {shortDate(draft.purchasedAt)}</small></div><strong>{money(total)}</strong></div>
-    <details className="receipt-data-editor" open={draft.purchaseDateInferred || !draft.market.name}>
-      <summary><span><b>Dados da nota</b><small>Mercado, data e identificação do documento</small></span><Pencil size={16}/><ChevronRight className="receipt-data-chevron" size={18}/></summary>
-      <div className="receipt-data-fields form-grid">
-        <Field label="Nome do mercado"><input value={draft.market.name || ''} onChange={(event) => setDraft({ ...draft, market: { ...draft.market, name: event.target.value } })} placeholder="Nome fantasia"/></Field>
-        <Field label="Razão social"><input value={draft.market.legalName || ''} onChange={(event) => setDraft({ ...draft, market: { ...draft.market, legalName: event.target.value } })} placeholder="Opcional"/></Field>
-        <Field label="CNPJ"><input inputMode="numeric" value={draft.market.cnpj || ''} onChange={(event) => setDraft({ ...draft, market: { ...draft.market, cnpj: onlyDigits(event.target.value) } })} placeholder="Somente números"/></Field>
-        <Field label="Data da compra"><input type="datetime-local" value={dateTimeLocal(draft.purchasedAt)} onChange={(event) => { if (event.target.value) setDraft({ ...draft, purchasedAt: new Date(event.target.value).toISOString(), purchaseDateInferred: false }) }}/></Field>
-        <Field label="Número da nota/cupom"><input value={draft.documentNumber || ''} onChange={(event) => setDraft({ ...draft, documentNumber: event.target.value })} placeholder="Opcional"/></Field>
-        <Field label="Total declarado"><input type="number" min="0" step="0.01" value={draft.declaredTotal || ''} onChange={(event) => setDraft({ ...draft, declaredTotal: Number(event.target.value) || 0 })}/></Field>
-        <Field label="Endereço" ><input value={draft.market.address || ''} onChange={(event) => setDraft({ ...draft, market: { ...draft.market, address: event.target.value } })} placeholder="Endereço do estabelecimento"/></Field>
-      </div>
-    </details>
-    <div className={`review-overview ${issueCount ? 'has-issues' : ''}`}><div><b>{draft.items.length} itens para validar</b><small>{exactVariantCount} variações exatas · {existingCount - exactVariantCount} novas variações · {draft.items.length - existingCount} novos produtos</small></div><span>{issueCount ? <><AlertTriangle size={15}/>{issueCount} {issueCount === 1 ? 'item pede atenção' : 'itens pedem atenção'}</> : <><Check size={15}/>Tudo preenchido</>}</span></div>
-    <div className="review-filters" aria-label="Filtrar itens da revisão">{reviewFilters.map(([value, label]) => <button type="button" className={itemFilter === value ? 'active' : ''} aria-pressed={itemFilter === value} key={value} onClick={() => applyItemFilter(value)}><span>{label}</span><b>{filterCounts[value]}</b></button>)}</div>
-    {(draft.importWarnings || []).map((warning, index) => <p className="warning" key={`${warning}-${index}`}>{warning}</p>)}
-    {draft.purchaseDateInferred && <p className="warning">A nota não informou uma data válida. Corrija a data em “Dados da nota”.</p>}
-    {draft.declaredTotal > 0 && Math.abs(draft.declaredTotal - total) > 0.02 && <p className="warning">A soma dos itens ({money(total)}) difere do total declarado ({money(draft.declaredTotal)}).</p>}
-    <EditableItems items={draft.items} products={products} compact filter={itemFilter} filteredItemIds={filteredItemIds} showOriginal={draft.source === 'json'} setItems={(items) => setDraft({ ...draft, items })}/>
-    <div className="modal-actions"><button className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={!draft.items.length} onClick={() => onSave(draft)}><Check size={17}/> Confirmar compra</button></div>
-  </Modal>
+  return <>
+    <Modal title="Revise a compra" subtitle="Confirme produtos, marcas, embalagens e valores." onClose={() => setShowExitConfirm(true)} wide>
+      <div className="review-market"><Store/><div className="grow"><b>{draft.market.name || 'Mercado não identificado'}</b><small>{draft.market.cnpj ? `CNPJ ${draft.market.cnpj}` : 'CNPJ não informado'} · {shortDate(draft.purchasedAt)}</small></div><strong>{money(total)}</strong></div>
+      <details className="receipt-data-editor" open={draft.purchaseDateInferred || !draft.market.name}>
+        <summary><span><b>Dados da nota</b><small>Mercado, data e identificação do documento</small></span><Pencil size={16}/><ChevronRight className="receipt-data-chevron" size={18}/></summary>
+        <div className="receipt-data-fields form-grid">
+          <Field label="Nome do mercado"><input value={draft.market.name || ''} onChange={(event) => setDraft({ ...draft, market: { ...draft.market, name: event.target.value } })} placeholder="Nome fantasia"/></Field>
+          <Field label="Razão social"><input value={draft.market.legalName || ''} onChange={(event) => setDraft({ ...draft, market: { ...draft.market, legalName: event.target.value } })} placeholder="Opcional"/></Field>
+          <Field label="CNPJ"><input inputMode="numeric" value={draft.market.cnpj || ''} onChange={(event) => setDraft({ ...draft, market: { ...draft.market, cnpj: onlyDigits(event.target.value) } })} placeholder="Somente números"/></Field>
+          <Field label="Data da compra"><input type="datetime-local" value={dateTimeLocal(draft.purchasedAt)} onChange={(event) => { if (event.target.value) setDraft({ ...draft, purchasedAt: new Date(event.target.value).toISOString(), purchaseDateInferred: false }) }}/></Field>
+          <Field label="Número da nota/cupom"><input value={draft.documentNumber || ''} onChange={(event) => setDraft({ ...draft, documentNumber: event.target.value })} placeholder="Opcional"/></Field>
+          <Field label="Total declarado"><input type="number" min="0" step="0.01" value={draft.declaredTotal || ''} onChange={(event) => setDraft({ ...draft, declaredTotal: Number(event.target.value) || 0 })}/></Field>
+          <Field label="Endereço" ><input value={draft.market.address || ''} onChange={(event) => setDraft({ ...draft, market: { ...draft.market, address: event.target.value } })} placeholder="Endereço do estabelecimento"/></Field>
+        </div>
+      </details>
+      <div className={`review-overview ${issueCount ? 'has-issues' : ''}`}><div><b>{draft.items.length} itens para validar</b><small>{exactVariantCount} variações exatas · {existingCount - exactVariantCount} novas variações · {draft.items.length - existingCount} novos produtos</small></div><span>{issueCount ? <><AlertTriangle size={15}/>{issueCount} {issueCount === 1 ? 'item pede atenção' : 'itens pedem atenção'}</> : <><Check size={15}/>Tudo preenchido</>}</span></div>
+      <div className="review-filters" aria-label="Filtrar itens da revisão">{reviewFilters.map(([value, label]) => <button type="button" className={itemFilter === value ? 'active' : ''} aria-pressed={itemFilter === value} key={value} onClick={() => applyItemFilter(value)}><span>{label}</span><b>{filterCounts[value]}</b></button>)}</div>
+      {(draft.importWarnings || []).map((warning, index) => <p className="warning" key={`${warning}-${index}`}>{warning}</p>)}
+      {draft.purchaseDateInferred && <p className="warning">A nota não informou uma data válida. Corrija a data em “Dados da nota”.</p>}
+      {draft.declaredTotal > 0 && Math.abs(draft.declaredTotal - total) > 0.02 && <p className="warning">A soma dos itens ({money(total)}) difere do total declarado ({money(draft.declaredTotal)}).</p>}
+      <EditableItems items={draft.items} products={products} compact filter={itemFilter} filteredItemIds={filteredItemIds} showOriginal={draft.source === 'json'} setItems={(items) => setDraft({ ...draft, items })}/>
+      <div className="modal-actions"><button className="secondary" onClick={() => setShowExitConfirm(true)}>Cancelar</button><button className="primary" disabled={!draft.items.length} onClick={() => onSave(draft)}><Check size={17}/> Confirmar compra</button></div>
+    </Modal>
+    {showExitConfirm && (
+      <Modal title="Sair sem salvar?" subtitle="A nota não será importada." onClose={() => setShowExitConfirm(false)}>
+        <p className="warning">Se você sair sem salvar, todas as edições desta revisão serão perdidas e a nota fiscal não será importada para o seu histórico de compras.</p>
+        <div className="modal-actions">
+          <button type="button" className="secondary" onClick={() => setShowExitConfirm(false)}>Continuar revisando</button>
+          <button type="button" className="primary destructive" onClick={onClose}>Sair sem salvar</button>
+        </div>
+      </Modal>
+    )}
+  </>
 }
 
 function EditPurchaseModal({ purchase, market: savedMarket, onClose, onSave }) {
@@ -1842,8 +2302,11 @@ function reviewItemMatchesFilter(products, item, filter) {
 function ProductMatchEditor({ item, items, setItems, products }) {
   const selected = findCatalogProduct(products, item)
   const suggested = !selected && (products.find((product) => product.id === item.suggestedProductId) || bestCatalogSuggestion(products, item))
-  const activeProducts = products.filter((product) => !product.archivedAt).sort((first, second) => first.name.localeCompare(second.name, 'pt-BR'))
-  const variants = normalizeProductVariants(selected?.variants)
+  const activeProducts = useMemo(
+    () => products.filter((product) => !product.archivedAt).sort((first, second) => first.name.localeCompare(second.name, 'pt-BR')),
+    [products]
+  )
+  const variants = useMemo(() => normalizeProductVariants(selected?.variants), [selected])
   const matchingVariant = selected && (variants.find((variant) => variant.id === item.variantId) || findMatchingVariant(selected, item))
   const selectProduct = (product, reason = 'manual') => updateItem(items, setItems, item.id, { productId: product.id, variantId: '', productName: product.name, category: product.category || item.category, catalogDecision: 'existing', matchReason: reason, importMissingFields: (item.importMissingFields || []).filter((field) => !['productName', 'category'].includes(field)) })
   const selectVariant = (variant) => updateItem(items, setItems, item.id, { variantId: variant.id, variety: variant.variety || '', brand: variant.brand || '', packageSize: variant.packageSize, packageUnit: variant.packageUnit, barcode: variant.barcode || item.barcode, matchReason: 'manual' })
@@ -1852,10 +2315,57 @@ function ProductMatchEditor({ item, items, setItems, products }) {
     const original = item.originalValues || {}
     updateItem(items, setItems, item.id, { variantId: '', variety: original.variety ?? item.variety, brand: original.brand ?? item.brand, packageSize: original.packageSize ?? item.packageSize, packageUnit: original.packageUnit ?? item.packageUnit, matchReason: 'manual' })
   }
+
+  const productOptions = useMemo(() => [
+    { value: 'new', label: 'Cadastrar como novo produto', subtitle: 'Criar novo registro no catálogo', isNew: true },
+    ...activeProducts.map((product) => ({
+      value: product.id,
+      label: product.name,
+      subtitle: product.category,
+    })),
+  ], [activeProducts])
+
+  const variantOptions = useMemo(() => {
+    if (!selected) return [{ value: '', label: 'Selecione primeiro o produto', subtitle: '', disabled: true }]
+    return [
+      { value: 'new', label: 'Cadastrar como nova variação', subtitle: 'Salvar sabor/marca como nova variação', isNew: true },
+      ...variants.map((variant) => ({
+        value: variant.id,
+        label: [variant.variety || 'Padrão', variant.brand || 'Sem marca', `${variant.packageSize} ${variant.packageUnit}`].filter(Boolean).join(' · '),
+        subtitle: variant.barcode ? `Cód. barras: ${variant.barcode}` : '',
+      })),
+    ]
+  }, [selected, variants])
+
   return <section className="catalog-selection">
     <div className="catalog-selection-grid">
-      <label><span>1. Produto no catálogo</span><select value={selected?.id || 'new'} onChange={(event) => { const product = products.find((saved) => saved.id === event.target.value); if (product) selectProduct(product); else markNew() }}><option value="new">Cadastrar como novo produto</option>{activeProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.category}</option>)}</select></label>
-      <label><span>2. Variação no catálogo</span><select disabled={!selected} value={selected ? matchingVariant?.id || 'new' : ''} onChange={(event) => { const variant = variants.find((saved) => saved.id === event.target.value); if (variant) selectVariant(variant); else markNewVariant() }}><option value={selected ? 'new' : ''}>{selected ? 'Cadastrar como nova variação' : 'Selecione primeiro o produto'}</option>{variants.map((variant) => <option key={variant.id} value={variant.id}>{[variant.variety, variant.brand, `${variant.packageSize} ${variant.packageUnit}`].filter(Boolean).join(' · ')}</option>)}</select></label>
+      <label>
+        <span>1. Produto no catálogo</span>
+        <SearchableSelect
+          value={selected?.id || 'new'}
+          options={productOptions}
+          placeholder="Buscar produto no catálogo..."
+          onChange={(val) => {
+            const product = products.find((saved) => saved.id === val)
+            if (product) selectProduct(product)
+            else markNew()
+          }}
+        />
+      </label>
+      <label>
+        <span>2. Variação no catálogo</span>
+        <SearchableSelect
+          disabled={!selected}
+          value={selected ? (matchingVariant?.id || 'new') : ''}
+          options={variantOptions}
+          placeholder={selected ? 'Buscar variação...' : 'Selecione primeiro o produto'}
+          onChange={(val) => {
+            const variant = variants.find((saved) => saved.id === val)
+            if (variant) selectVariant(variant)
+            else markNewVariant()
+          }}
+        />
+      </label>
     </div>
     {suggested && <button type="button" className="catalog-suggestion" onClick={() => selectProduct(suggested, 'suggestion')}><PackageCheck size={13}/> Sugestão: usar {suggested.name}</button>}
     {selected && item.importedProductName && normalizeText(item.importedProductName) !== normalizeText(selected.name) && <small className="mapping-explanation">“{item.importedProductName}” será registrado como <b>{selected.name}</b>.</small>}
@@ -2042,6 +2552,28 @@ function EditPurchaseItemModal({ purchase, item: initialItem, state, onClose, on
 
   const originalDescription = initialItem.originalDescription || initialItem.importedProductName
 
+  const productOptions = useMemo(() => [
+    { value: 'new', label: '➕ Cadastrar como novo produto', subtitle: 'Criar novo registro no catálogo', isNew: true },
+    ...activeProducts.map((p) => ({
+      value: p.id,
+      label: p.name,
+      subtitle: p.category,
+    })),
+  ], [activeProducts])
+
+  const variantOptions = useMemo(() => {
+    if (targetProductId === 'new') {
+      return [{ value: 'new', label: 'Nova variação do novo produto', subtitle: '', disabled: false }]
+    }
+    return [
+      { value: 'new', label: '➕ Criar como nova variedade neste produto', subtitle: 'Salva como nova variedade', isNew: true },
+      ...productVariants.map((v) => ({
+        value: v.id,
+        label: [v.variety || 'Padrão', v.brand || 'Sem marca', `${v.packageSize} ${v.packageUnit}`].join(' · '),
+      })),
+    ]
+  }, [targetProductId, productVariants])
+
   return (
     <Modal
       title="Editar item da compra"
@@ -2067,37 +2599,23 @@ function EditPurchaseItemModal({ purchase, item: initialItem, state, onClose, on
           <div className="catalog-selection-grid">
             <label>
               <span>1. Associar ao produto no catálogo</span>
-              <select
+              <SearchableSelect
                 value={targetProductId}
-                onChange={(e) => handleProductChange(e.target.value)}
-              >
-                <option value="new">➕ Cadastrar como novo produto</option>
-                {activeProducts.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} · {p.category}
-                  </option>
-                ))}
-              </select>
+                options={productOptions}
+                placeholder="Buscar produto..."
+                onChange={(val) => handleProductChange(val)}
+              />
             </label>
 
             <label>
               <span>2. Variação no catálogo</span>
-              <select
+              <SearchableSelect
                 disabled={targetProductId === 'new'}
                 value={targetVariantId}
-                onChange={(e) => handleVariantChange(e.target.value)}
-              >
-                <option value="new">
-                  {targetProductId === 'new'
-                    ? 'Nova variação do novo produto'
-                    : '➕ Criar como nova variedade neste produto'}
-                </option>
-                {productVariants.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {[v.variety || 'Padrão', v.brand || 'Sem marca', `${v.packageSize} ${v.packageUnit}`].join(' · ')}
-                  </option>
-                ))}
-              </select>
+                options={variantOptions}
+                placeholder={targetProductId === 'new' ? 'Nova variação do novo produto' : 'Buscar variação...'}
+                onChange={(val) => handleVariantChange(val)}
+              />
             </label>
           </div>
           {targetProductId !== 'new' && targetVariantId === 'new' && (

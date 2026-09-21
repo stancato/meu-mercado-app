@@ -19,8 +19,43 @@ function versionedServiceWorker() {
   }
 }
 
+function nfceProxyPlugin() {
+  return {
+    name: 'nfce-proxy-plugin',
+    configureServer(server) {
+      server.middlewares.use('/api/proxy-nfce', async (req, res) => {
+        try {
+          const urlObj = new URL(req.url, 'http://localhost')
+          const targetUrl = urlObj.searchParams.get('url')
+          if (!targetUrl) {
+            res.statusCode = 400
+            res.end('Missing url parameter')
+            return
+          }
+
+          const response = await fetch(targetUrl, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            },
+          })
+
+          const html = await response.text()
+          res.setHeader('Content-Type', 'text/html; charset=utf-8')
+          res.setHeader('Access-Control-Allow-Origin', '*')
+          res.statusCode = response.status
+          res.end(html)
+        } catch (err) {
+          res.statusCode = 500
+          res.end(err.message || 'Error fetching NFC-e')
+        }
+      })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), versionedServiceWorker()],
+  plugins: [react(), versionedServiceWorker(), nfceProxyPlugin()],
   build: {
     rollupOptions: {
       output: {

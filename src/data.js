@@ -468,12 +468,227 @@ export function buildReceiptPrompt(products = [], options = {}) {
   return prompt
 }
 
+export function parseNfceHtml(htmlString) {
+  if (!htmlString || typeof htmlString !== 'string') {
+    throw new Error('Conteúdo HTML da nota fiscal não informado.')
+  }
+
+  const clean = (str) => String(str || '').replace(/\s+/g, ' ').trim()
+  const parseNum = (str) => {
+    if (!str) return 0
+    const cleaned = String(str).replace(/[^\d,.-]/g, '').replace(',', '.')
+    return Number(cleaned) || 0
+  }
+
+  // 1. Extrair Estabelecimento / Mercado
+  let marketName = ''
+  const u20Match = htmlString.match(/id=["']u20["'][^>]*>([^<]+)</i) || htmlString.match(/class=["']txtTopo["'][^>]*>([^<]+)</i)
+  if (u20Match) marketName = clean(u20Match[1])
+
+  let cnpj = ''
+  const cnpjMatch = htmlString.match(/CNPJ[:\s]*([0-9.\-/]+)/i)
+  if (cnpjMatch) cnpj = onlyDigits(cnpjMatch[1])
+
+  let address = ''
+  const addressMatch = htmlString.match(/CNPJ[^<]*<\/div>\s*<div class=["']text["'][^>]*>([\s\S]*?)<\/div>/i)
+  if (addressMatch) {
+    address = clean(addressMatch[1].replace(/<br\s*\/?>/gi, ', ').replace(/\s*,\s*/g, ', '))
+  }
+
+  // 2. Extrair Informações Gerais (Data, Número, Chave)
+  let emissionDateStr = ''
+  const dateMatch = htmlString.match(/Emiss[aã]o[:\s]*(?:<\/strong>)?\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4}\s+[0-9]{2}:[0-9]{2}(?::[0-9]{2})?)/i)
+    || htmlString.match(/([0-9]{2}\/[0-9]{2}\/[0-9]{4}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})/i)
+  if (dateMatch) {
+    const parts = dateMatch[1].split(/[/\s:]/)
+    if (parts.length >= 5) {
+      const [d, m, y, h, min, s = '00'] = parts
+      emissionDateStr = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}T${h.padStart(2, '0')}:${min.padStart(2, '0')}:${s.padStart(2, '0')}`
+    }
+  }
+
+  let docNumber = ''
+  const docMatch = htmlString.match(/N[úu]mero[:\s]*(?:<\/strong>)?\s*(\d+)/i)
+  if (docMatch) docNumber = docMatch[1]
+
+  let totalDeclared = 0
+  const totalMatch = htmlString.match(/Valor a pagar R\$:[^<]*<\/label>\s*<span[^>]*class=["'][^"']*totalNumb[^"']*["'][^>]*>([^<]+)<\/span>/i)
+    || htmlString.match(/class=["'][^"']*totalNumb txtMax[^"']*["'][^>]*>([^<]+)<\/span>/i)
+  if (totalMatch) totalDeclared = parseNum(totalMatch[1])
+
+  // 3. Extrair Itens da Tabela
+  const items = []
+  const itemBlocks = htmlString.split(/<tr\s+id=["']Item/i).slice(1)
+
+  for (const block of itemBlocks) {
+    const titMatch = block.match(/class=["']txtTit["'][^>]*>([^<]+)<\/span>/i)
+    const rawDesc = titMatch ? clean(titMatch[1]) : ''
+    if (!rawDesc) continue
+
+    const codMatch = block.match(/class=["']RCod["'][^>]*>\s*\(C[óo]digo[:\s]*(\d+)\s*\)/i)
+    const itemCode = codMatch ? codMatch[1].trim() : ''
+
+    const qtdMatch = block.match(/class=["']Rqtd["'][^>]*>(?:<strong>[^<]*<\/strong>)?\s*([0-9,.]+)/i)
+    const quantity = qtdMatch ? parseNum(qtdMatch[1]) : 1
+
+    const unMatch = block.match(/class=["']RUN["'][^>]*>(?:<strong>[^<]*<\/strong>)?\s*([A-Za-z0-9]+)/i)
+    const unitRaw = unMatch ? clean(unMatch[1]).toLowerCase() : 'un'
+    const packageUnit = unitRaw === 'kg' ? 'kg' : unitRaw === 'g' || unitRaw === 'gr' ? 'g' : unitRaw === 'l' || unitRaw === 'lt' ? 'L' : unitRaw === 'ml' ? 'ml' : 'un'
+
+    const vlUnitMatch = block.match(/class=["']RvlUnit["'][^>]*>(?:<strong>[^<]*<\/strong>)?\s*([0-9,.]+)/i)
+    const unitPrice = vlUnitMatch ? parseNum(vlUnitMatch[1]) : 0
+
+    const totalItemMatch = block.match(/class=["']valor["'][^>]*>([^<]+)<\/span>/i)
+    const totalPrice = totalItemMatch ? parseNum(totalItemMatch[1]) : (quantity * unitPrice)
+
+    items.push({
+      id: uid(),
+      descricaoOriginal: rawDesc,
+      produto: rawDesc,
+      variedade: '',
+      marca: '',
+      quantidadeComprada: quantity,
+      conteudoEmbalagem: packageUnit === 'kg' ? quantity : 1,
+      unidadeConteudo: packageUnit,
+      precoUnitario: unitPrice,
+      precoTotal: totalPrice,
+      codigoBarras: itemCode,
+      categoria: 'Outros',
+      problemasPossiveis: [],
+    })
+  }
+
+  if (items.length === 0) {
+    throw new Error('Não foi possível identificar os produtos na página da nota fiscal.')
+  }
+
+  return {
+    mercado: {
+      nome: marketName || 'Mercado não identificado',
+      razaoSocial: marketName,
+      cnpj,
+      endereco: address,
+    },
+    compra: {
+      data: emissionDateStr || nowIso(),
+      numeroDocumento: docNumber,
+      valorTotal: totalDeclared || items.reduce((acc, it) => acc + it.precoTotal, 0),
+    },
+    itens: items,
+  }
+}
+
+export async function fetchNfceFromUrl(url) {
+  if (!url || typeof url !== 'string' || !url.trim().startsWith('http')) {
+    throw new Error('Informe uma URL válida da NFC-e.')
+  }
+
+  const cleanUrl = url.trim()
+
+  // 1. Tentar proxy interno (/api/proxy-nfce) caso esteja rodando com Vite dev server
+  try {
+    const localRes = await fetch(`/api/proxy-nfce?url=${encodeURIComponent(cleanUrl)}`, {
+      signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined,
+    })
+    if (localRes.ok) {
+      const html = await localRes.text()
+      if (html && (html.includes('DOCUMENTO AUXILIAR') || html.includes('NFC-e') || html.includes('tabResult') || html.includes('txtTit') || html.length > 500)) {
+        return html
+      }
+    }
+  } catch {}
+
+  // 2. Tentar AllOrigins JSON format (formato JSON que não falha com certificado da SEFAZ)
+  try {
+    const allOriginsRes = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(cleanUrl)}`, {
+      signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined,
+    })
+    if (allOriginsRes.ok) {
+      const data = await allOriginsRes.json()
+      if (data?.contents && (data.contents.includes('DOCUMENTO AUXILIAR') || data.contents.includes('NFC-e') || data.contents.includes('tabResult') || data.contents.length > 500)) {
+        return data.contents
+      }
+    }
+  } catch {}
+
+  // 3. Tentar CodeTabs proxy
+  try {
+    const codetabsRes = await fetch(`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(cleanUrl)}`, {
+      signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined,
+    })
+    if (codetabsRes.ok) {
+      const html = await codetabsRes.text()
+      if (html && (html.includes('DOCUMENTO AUXILIAR') || html.includes('NFC-e') || html.includes('tabResult') || html.length > 500)) {
+        return html
+      }
+    }
+  } catch {}
+
+  // 4. Tentar CorsProxy.io
+  try {
+    const corsProxyRes = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(cleanUrl)}`, {
+      signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined,
+    })
+    if (corsProxyRes.ok) {
+      const html = await corsProxyRes.text()
+      if (html && (html.includes('DOCUMENTO AUXILIAR') || html.includes('NFC-e') || html.includes('tabResult') || html.length > 500)) {
+        return html
+      }
+    }
+  } catch {}
+
+  throw new Error('Não foi possível carregar os dados da SEFAZ. Verifique sua conexão ou se a URL está correta.')
+}
+
+export function buildReceiptPromptFromNfce(nfcePayload, products = [], options = {}) {
+  const { includeCatalog = true } = options
+  let prompt = `Analise os dados extraídos desta nota fiscal brasileira e formate-os em JSON padronizado conforme o catálogo.\n\nDados da Nota Fiscal:\n\`\`\`json\n${JSON.stringify(nfcePayload, null, 2)}\n\`\`\`\n\nResponda SOMENTE com JSON válido, sem markdown e sem explicações, seguindo a estrutura:\n{\n  "mercado": {\n    "nome": "${nfcePayload?.mercado?.nome || ''}",\n    "razaoSocial": "${nfcePayload?.mercado?.razaoSocial || ''}",\n    "cnpj": "${nfcePayload?.mercado?.cnpj || ''}",\n    "endereco": "${nfcePayload?.mercado?.endereco || ''}"\n  },\n  "compra": {\n    "data": "${nfcePayload?.compra?.data || ''}",\n    "numeroDocumento": "${nfcePayload?.compra?.numeroDocumento || ''}",\n    "valorTotal": ${Number(nfcePayload?.compra?.valorTotal || 0)}\n  },\n  "itens": [\n    {\n      "descricaoOriginal": "descrição original",\n      "produto": "nome genérico e limpo do produto",\n      "variedade": "sabor/tipo se aplicável ou vazio",\n      "marca": "marca se identificável ou vazio",\n      "categoria": "Hortifruti, Mercearia, Frios, Carnes, Bebidas, Limpeza, Higiene ou Outros",\n      "quantidadeComprada": 1,\n      "conteudoEmbalagem": 1,\n      "unidadeConteudo": "un, kg, g, L ou ml",\n      "precoUnitario": 0.00,\n      "precoTotal": 0.00,\n      "codigoBarras": "código se houver"\n    }\n  ]\n}`
+
+  if (includeCatalog && Array.isArray(products) && products.length > 0) {
+    const catalog = products
+      .map((p) => {
+        const variants = normalizeProductVariants(p.variants || [])
+        const varieties = [...new Set(variants.map((v) => (v.variety || '').trim()).filter(Boolean))]
+        const brands = [...new Set([
+          ...(p.brands || []).map((b) => String(b || '').trim()),
+          ...variants.map((v) => (v.brand || '').trim()),
+        ].filter(Boolean))]
+
+        const entry = {
+          produto: p.name,
+          categoria: p.category || 'Outros',
+        }
+        if (varieties.length > 0) entry.variedades = varieties
+        if (brands.length > 0) entry.marcas = brands
+        return entry
+      })
+      .filter((p) => Boolean(p.produto && p.produto.trim()))
+      .sort((a, b) => a.produto.localeCompare(b.produto, 'pt-BR'))
+
+    if (catalog.length > 0) {
+      prompt += `\n\n---\nCatálogo de produtos e variações já existentes:\nSempre que um item da nota corresponder a um produto ou variedade abaixo, use EXATAMENTE a mesma grafia para os campos "produto", "variedade", "marca" e "categoria" para manter o catálogo padronizado.\n\n\`\`\`json\n${JSON.stringify(catalog, null, 2)}\n\`\`\``
+    }
+  }
+
+  return prompt
+}
+
 export function variantMatchesItem(variant, item) {
   return (
     normalizeText(variant.variety) === normalizeText(item.variety) &&
     normalizeText(variant.brand) === normalizeText(item.brand) &&
     Number(variant.packageSize || 1) === Number(item.packageSize || 1) &&
     (variant.packageUnit || 'un') === (item.packageUnit || 'un')
+  )
+}
+
+export function findMatchingVariant(product, item) {
+  if (!product || !item) return undefined
+  const variants = normalizeProductVariants(product.variants)
+  return (
+    variants.find((variant) => variant.id && variant.id === item.variantId) ||
+    variants.find((variant) => variantMatchesItem(variant, item)) ||
+    undefined
   )
 }
 
@@ -762,7 +977,7 @@ export function updatePurchaseItem(state, payload) {
   const packageSize = Math.max(0.001, Number(itemData.packageSize) || 1)
   const packageUnit = itemData.packageUnit || 'un'
   const unitPrice = Number(itemData.unitPrice) || (Number(itemData.totalPrice) / quantity) || 0
-  const totalPrice = Number(itemData.totalPrice) != null && !Number.isNaN(Number(itemData.totalPrice))
+  const totalPrice = Number.isFinite(Number(itemData.totalPrice))
     ? Number(itemData.totalPrice)
     : unitPrice * quantity
   const variety = (itemData.variety || '').trim()
@@ -939,5 +1154,195 @@ export function updatePurchaseItem(state, payload) {
   })
 }
 
+export function levenshteinDistance(str1 = '', str2 = '') {
+  const s1 = String(str1 || '')
+  const s2 = String(str2 || '')
+  const m = s1.length
+  const n = s2.length
+  if (!m) return n
+  if (!n) return m
 
+  const d = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
+  for (let i = 0; i <= m; i++) d[i][0] = i
+  for (let j = 0; j <= n; j++) d[0][j] = j
 
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const cost = s1[i - 1] === s2[j - 1] ? 0 : 1
+      d[i][j] = Math.min(
+        d[i - 1][j] + 1,
+        d[i][j - 1] + 1,
+        d[i - 1][j - 1] + cost
+      )
+    }
+  }
+  return d[m][n]
+}
+
+const STOP_WORDS = new Set([
+  'de', 'da', 'do', 'das', 'dos', 'e', 'em', 'com', 'para', 'por', 'sem', 'ao', 'aos',
+  'un', 'und', 'kg', 'g', 'gr', 'l', 'lt', 'ml', 'pct', 'cx', 'pc', 'pacote', 'caixa', 'unidade'
+])
+
+export function tokenizeProductName(name = '') {
+  return normalizeText(name)
+    .replace(/[^a-z0-9\s]/gi, ' ')
+    .split(/\s+/)
+    .filter((token) => token.length > 0 && !STOP_WORDS.has(token))
+}
+
+export function findDuplicateProductSuggestions(products = [], options = {}) {
+  const { dismissedPairIds = new Set() } = options
+  const activeProducts = products.filter((p) => p && !p.archivedAt)
+  const suggestions = []
+
+  for (let i = 0; i < activeProducts.length; i++) {
+    for (let j = i + 1; j < activeProducts.length; j++) {
+      const p1 = activeProducts[i]
+      const p2 = activeProducts[j]
+
+      const pairId = [p1.id, p2.id].sort().join('::')
+      if (dismissedPairIds.has(pairId)) continue
+
+      const n1 = normalizeText(p1.name)
+      const n2 = normalizeText(p2.name)
+      if (!n1 || !n2) continue
+
+      let match = null
+
+      // 1. Barcode check
+      const b1 = (p1.variants || []).map((v) => onlyDigits(v.barcode)).filter((b) => b && b.length >= 6)
+      const b2 = (p2.variants || []).map((v) => onlyDigits(v.barcode)).filter((b) => b && b.length >= 6)
+      const sharedBarcode = b1.find((b) => b2.includes(b))
+      if (sharedBarcode) {
+        match = {
+          score: 1.0,
+          confidence: 'high',
+          reason: `Código de barras compartilhado (${sharedBarcode})`,
+          type: 'barcode',
+        }
+      }
+
+      // 2. Exact or normalized name match
+      if (!match && n1 === n2) {
+        match = {
+          score: 0.99,
+          confidence: 'high',
+          reason: 'Nomes idênticos no catálogo',
+          type: 'identical',
+        }
+      }
+
+      // 3. Aliases match
+      if (!match) {
+        const a1 = (p1.aliases || []).map(normalizeText)
+        const a2 = (p2.aliases || []).map(normalizeText)
+        if (a1.includes(n2) || a2.includes(n1)) {
+          match = {
+            score: 0.95,
+            confidence: 'high',
+            reason: 'Um dos nomes está cadastrado como apelido/sinônimo',
+            type: 'alias',
+          }
+        }
+      }
+
+      // 4. Minor typo / Levenshtein distance
+      if (!match) {
+        const dist = levenshteinDistance(n1, n2)
+        const maxLen = Math.max(n1.length, n2.length)
+        if (maxLen >= 4 && dist === 1) {
+          match = {
+            score: 0.92,
+            confidence: 'high',
+            reason: 'Nomes quase idênticos (diferença de 1 letra)',
+            type: 'fuzzy',
+          }
+        } else if (maxLen >= 7 && dist === 2) {
+          match = {
+            score: 0.82,
+            confidence: 'high',
+            reason: 'Nomes muito parecidos (possível erro de digitação)',
+            type: 'fuzzy',
+          }
+        }
+      }
+
+      // 5. Containment match (e.g. "Café Pilão" vs "Café" or "Leite Integral" vs "Leite")
+      if (!match) {
+        const p1ContainsP2 = n1.startsWith(n2 + ' ') || n1.endsWith(' ' + n2) || n1.includes(' ' + n2 + ' ')
+        const p2ContainsP1 = n2.startsWith(n1 + ' ') || n2.endsWith(' ' + n1) || n2.includes(' ' + n1 + ' ')
+        if (p1ContainsP2 || p2ContainsP1) {
+          const shorterName = n1.length <= n2.length ? p1.name : p2.name
+          const longerName = n1.length <= n2.length ? p2.name : p1.name
+          const shorterNorm = n1.length <= n2.length ? n1 : n2
+          const sameCategory = p1.category === p2.category || p1.category === 'Outros' || p2.category === 'Outros'
+
+          if (shorterNorm.length >= 3 && sameCategory) {
+            match = {
+              score: 0.85,
+              confidence: 'high',
+              reason: `"${longerName}" contém "${shorterName}" (possível marca ou sabor)`,
+              type: 'containment',
+            }
+          }
+        }
+      }
+
+      // 6. Token similarity
+      if (!match) {
+        const t1 = tokenizeProductName(p1.name)
+        const t2 = tokenizeProductName(p2.name)
+        if (t1.length > 0 && t2.length > 0) {
+          const sharedTokens = t1.filter((t) => t2.includes(t))
+          if (sharedTokens.length > 0) {
+            const dice = (2 * sharedTokens.length) / (t1.length + t2.length)
+            const sameCategory = p1.category === p2.category
+            const oneIsOutros = p1.category === 'Outros' || p2.category === 'Outros'
+            let finalScore = dice * 0.85 + (sameCategory ? 0.1 : oneIsOutros ? 0 : -0.2)
+
+            if (finalScore >= 0.65) {
+              match = {
+                score: Math.min(0.92, Math.max(0.65, Number(finalScore.toFixed(2)))),
+                confidence: finalScore >= 0.8 ? 'high' : 'medium',
+                reason: `Termos em comum: ${sharedTokens.join(', ')}`,
+                type: 'tokens',
+              }
+            }
+          }
+        }
+      }
+
+      if (match) {
+        // Determine primary (left) vs secondary (right)
+        // Prefer product with shorter base name, starter product, or more variants
+        const v1Count = (p1.variants || []).length
+        const v2Count = (p2.variants || []).length
+        let left = p1
+        let right = p2
+
+        if (n2.length < n1.length && (n1.includes(n2) || v2Count >= v1Count)) {
+          left = p2
+          right = p1
+        } else if (v2Count > v1Count) {
+          left = p2
+          right = p1
+        } else if (p2.starter && !p1.starter) {
+          left = p2
+          right = p1
+        }
+
+        suggestions.push({
+          id: pairId,
+          products: [left, right],
+          score: match.score,
+          confidence: match.confidence,
+          reason: match.reason,
+          type: match.type,
+        })
+      }
+    }
+  }
+
+  return suggestions.sort((a, b) => b.score - a.score)
+}

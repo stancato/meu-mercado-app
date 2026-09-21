@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseJsonInput, mergeProductVariants, promoteVariantToProduct, updatePurchaseItem } from './data.js'
+import { parseJsonInput, mergeProductVariants, promoteVariantToProduct, updatePurchaseItem, parseNfceHtml, normalizeImport, findMatchingVariant, levenshteinDistance, findDuplicateProductSuggestions } from './data.js'
 
 test('parseJsonInput interpreta JSON padrão', () => {
   const json = '{"mercado": {"nome": "Extra"}, "itens": [{"produto": "Arroz", "precoTotal": 20}]}'
@@ -350,4 +350,166 @@ test('updatePurchaseItem remapeia item para outro produto existente', () => {
   assert.equal(nextState.purchases[0].total, 6.5)
 })
 
+test('parseNfceHtml extrai dados do estabelecimento, itens, valores e data da NFC-e SEFAZ SP', () => {
+  const sampleHtml = `
+    <div id="u20" class="txtTopo">SUPERMERCADOS DALBEN LTDA</div>
+    <div class="text">CNPJ: 46.241.741/0004-08</div>
+    <div class="text">AV. ALBINO J B DE OLIVEIRA, 511, BARAO GERALDO, CAMPINAS, SP</div>
+    <table id="tabResult">
+      <tr id="Item + 1">
+        <td>
+          <span class="txtTit">SANSEVIEIRA VEILING P12</span>
+          <span class="RCod">(Código: 59704)</span>
+          <span class="Rqtd"><strong>Qtde.:</strong>1</span>
+          <span class="RUN"><strong>UN: </strong>UN</span>
+          <span class="RvlUnit"><strong>Vl. Unit.:</strong> 24,99</span>
+        </td>
+        <td class="txtTit"><span class="valor">24,99</span></td>
+      </tr>
+      <tr id="Item + 2">
+        <td>
+          <span class="txtTit">PAO FRANCES Kg</span>
+          <span class="RCod">(Código: 608)</span>
+          <span class="Rqtd"><strong>Qtde.:</strong>0,488</span>
+          <span class="RUN"><strong>UN: </strong>KG</span>
+          <span class="RvlUnit"><strong>Vl. Unit.:</strong> 19,99</span>
+        </td>
+        <td class="txtTit"><span class="valor">9,76</span></td>
+      </tr>
+    </table>
+    <div id="linhaTotal" class="linhaShade">
+      <label>Valor a pagar R$:</label>
+      <span class="totalNumb txtMax">34,75</span>
+    </div>
+    <div id="infos">
+      <strong>Número: </strong>71304<strong> Série: </strong>209<strong> Emissão: </strong>19/09/2026 10:03:57
+    </div>
+  `
+
+  const result = parseNfceHtml(sampleHtml)
+  assert.equal(result.mercado.nome, 'SUPERMERCADOS DALBEN LTDA')
+  assert.equal(result.mercado.cnpj, '46241741000408')
+  assert.ok(result.mercado.endereco.includes('CAMPINAS'))
+  assert.equal(result.compra.numeroDocumento, '71304')
+  assert.equal(result.compra.data, '2026-09-19T10:03:57')
+  assert.equal(result.compra.valorTotal, 34.75)
+  assert.equal(result.itens.length, 2)
+
+  // Item 1
+  assert.equal(result.itens[0].produto, 'SANSEVIEIRA VEILING P12')
+  assert.equal(result.itens[0].codigoBarras, '59704')
+  assert.equal(result.itens[0].quantidadeComprada, 1)
+  assert.equal(result.itens[0].precoUnitario, 24.99)
+  assert.equal(result.itens[0].precoTotal, 24.99)
+  assert.equal(result.itens[0].unidadeConteudo, 'un')
+
+  // Item 2 (a granel / kg)
+  assert.equal(result.itens[1].produto, 'PAO FRANCES Kg')
+  assert.equal(result.itens[1].quantidadeComprada, 0.488)
+  assert.equal(result.itens[1].unidadeConteudo, 'kg')
+  assert.equal(result.itens[1].precoTotal, 9.76)
+
+  // Compatibilidade com normalizeImport
+  const normalized = normalizeImport(result)
+  assert.equal(normalized.market.name, 'SUPERMERCADOS DALBEN LTDA')
+  assert.equal(normalized.items.length, 2)
+  assert.equal(normalized.items[0].productName, 'SANSEVIEIRA VEILING P12')
+})
+
+test('findMatchingVariant localiza variante por variantId ou por características (variedade, marca, embalagem)', () => {
+  const product = {
+    id: 'prod-1',
+    name: 'Leite',
+    variants: [
+      { id: 'var-1', variety: 'Integral', brand: 'Italac', packageSize: 1, packageUnit: 'L' },
+      { id: 'var-2', variety: 'Desnatado', brand: 'Piracanjuba', packageSize: 1, packageUnit: 'L' }
+    ]
+  }
+
+  // Busca por variantId
+  const matchById = findMatchingVariant(product, { variantId: 'var-2', variety: 'Outro', brand: 'Outro', packageSize: 1, packageUnit: 'L' })
+  assert.equal(matchById?.id, 'var-2')
+
+  // Busca por atributos coincidentes
+  const matchByProps = findMatchingVariant(product, { variety: 'Integral', brand: 'Italac', packageSize: 1, packageUnit: 'L' })
+  assert.equal(matchByProps?.id, 'var-1')
+
+  // Variação inexistente
+  const noMatch = findMatchingVariant(product, { variety: 'Sem Lactose', brand: 'Italac', packageSize: 1, packageUnit: 'L' })
+  assert.equal(noMatch, undefined)
+
+  // Entradas nulas ou indefinidas
+  assert.equal(findMatchingVariant(null, {}), undefined)
+  assert.equal(findMatchingVariant(product, null), undefined)
+})
+
+test('levenshteinDistance calcula a distância de edição entre palavras', () => {
+  assert.equal(levenshteinDistance('feijao', 'feijao'), 0)
+  assert.equal(levenshteinDistance('iogurte', 'iogurt'), 1)
+  assert.equal(levenshteinDistance('sabonete', 'sabonte'), 1)
+  assert.equal(levenshteinDistance('carne', 'frango'), 5)
+  assert.equal(levenshteinDistance('', 'leite'), 5)
+})
+
+test('findDuplicateProductSuggestions detecta duplicatas com nomes normalizados idênticos', () => {
+  const products = [
+    { id: 'p1', name: 'Feijão Carioca', category: 'Mercearia', variants: [] },
+    { id: 'p2', name: 'feijao carioca', category: 'Mercearia', variants: [] },
+    { id: 'p3', name: 'Arroz Branco', category: 'Mercearia', variants: [] },
+  ]
+  const suggestions = findDuplicateProductSuggestions(products)
+  assert.equal(suggestions.length, 1)
+  assert.equal(suggestions[0].type, 'identical')
+  assert.ok(suggestions[0].score >= 0.95)
+  assert.equal(suggestions[0].confidence, 'high')
+})
+
+test('findDuplicateProductSuggestions detecta erros de digitação e pequenos desvios de nome', () => {
+  const products = [
+    { id: 'p1', name: 'Iogurte Natural', category: 'Frios', variants: [] },
+    { id: 'p2', name: 'Iogurt Natural', category: 'Frios', variants: [] },
+  ]
+  const suggestions = findDuplicateProductSuggestions(products)
+  assert.equal(suggestions.length, 1)
+  assert.equal(suggestions[0].type, 'fuzzy')
+  assert.equal(suggestions[0].confidence, 'high')
+})
+
+test('findDuplicateProductSuggestions detecta contenção de nomes (marca/sabor embutido)', () => {
+  const products = [
+    { id: 'p1', name: 'Café', category: 'Mercearia', variants: [] },
+    { id: 'p2', name: 'Café Pilão', category: 'Mercearia', variants: [] },
+    { id: 'p3', name: 'Detergente Neutro', category: 'Limpeza', variants: [] },
+    { id: 'p4', name: 'Detergente', category: 'Limpeza', variants: [] },
+  ]
+  const suggestions = findDuplicateProductSuggestions(products)
+  assert.equal(suggestions.length, 2)
+  const cafeSuggestion = suggestions.find((s) => s.products.some((p) => p.name === 'Café'))
+  assert.ok(cafeSuggestion)
+  assert.equal(cafeSuggestion.type, 'containment')
+  assert.equal(cafeSuggestion.products[0].name, 'Café')
+  assert.equal(cafeSuggestion.products[1].name, 'Café Pilão')
+})
+
+test('findDuplicateProductSuggestions detecta produtos com mesmo código de barras', () => {
+  const products = [
+    { id: 'p1', name: 'Shampoo A', category: 'Higiene', variants: [{ id: 'v1', barcode: '7891234567890' }] },
+    { id: 'p2', name: 'Shampoo Anticaspa', category: 'Higiene', variants: [{ id: 'v2', barcode: '7891234567890' }] },
+  ]
+  const suggestions = findDuplicateProductSuggestions(products)
+  assert.equal(suggestions.length, 1)
+  assert.equal(suggestions[0].type, 'barcode')
+  assert.equal(suggestions[0].score, 1.0)
+})
+
+test('findDuplicateProductSuggestions ignora produtos arquivados e pares dispensados', () => {
+  const products = [
+    { id: 'p1', name: 'Leite', category: 'Frios', variants: [] },
+    { id: 'p2', name: 'Leite Integral', category: 'Frios', variants: [] },
+    { id: 'p3', name: 'Leite Desnatado', category: 'Frios', archivedAt: '2026-01-01T00:00:00Z', variants: [] },
+  ]
+  const dismissedPairIds = new Set([[ 'p1', 'p2' ].sort().join('::')])
+  const suggestions = findDuplicateProductSuggestions(products, { dismissedPairIds })
+  assert.equal(suggestions.length, 0)
+})
 
