@@ -664,17 +664,44 @@ function PriceHistoryPanel({ productName, entries, filter, selectedVarietyLabel,
     <div className="price-history-summary"><div><small>Preço médio</small><strong>{filteredEntries.length ? money(average) : '—'}</strong><span>por item comprado</span></div><div><small>Registros</small><strong>{filteredEntries.length}</strong><span>{filteredEntries.length === 1 ? 'compra' : 'compras'}</span></div></div>
     {filteredEntries.length ? <div className="item-price-history-list">{filteredEntries.map((entry) => {
       const originalName = entry.item.originalDescription || entry.item.importedProductName
+      const unitPrice = entry.unitPrice
+      const quantity = Number(entry.item.quantity) || 1
+      const normalized = normalizedPrice(entry.item)
+      const variantDesc = [entry.item.variety, entry.item.brand, `${Number(entry.item.packageSize) || 1} ${entry.item.packageUnit || 'un'}`].filter(Boolean).join(' · ')
       return <article key={`${entry.purchase.id}-${entry.item.id}`} className="history-item-row">
-        <span className="price-history-date"><b>{shortDate(entry.purchase.purchasedAt)}</b><small>{entry.purchase.marketName}</small></span>
-        <span className="price-history-variant">
-          <b>{entry.item.variety || 'Sem variedade'}</b>
-          <small>{[entry.item.brand, `${Number(entry.item.packageSize) || 1} ${entry.item.packageUnit || 'un'}`].filter(Boolean).join(' · ')}</small>
-          {originalName && <small className="history-original-name" title={`Na nota fiscal: ${originalName}`}>Na nota: {originalName}</small>}
-        </span>
-        <span className="price-history-value"><strong>{money(entry.unitPrice)}</strong>{Number(entry.item.quantity) !== 1 && <small>{entry.item.quantity} itens · total {money(entry.item.totalPrice)}</small>}</span>
-        <div className="history-item-actions">
-          <button type="button" className="history-action-btn" title="Ver compra completa" aria-label="Ver compra" onClick={() => onOpenModal?.({ type: 'purchase-detail', purchase: entry.purchase, backModal: listItem ? { type: 'item', item: listItem } : null })}><Store size={13}/><span>Ver compra</span></button>
-          <button type="button" className="history-action-btn" title="Editar este item da compra" aria-label="Editar item da compra" onClick={() => onOpenModal?.({ type: 'edit-purchase-item', purchase: entry.purchase, item: entry.item, backModal: listItem ? { type: 'item', item: listItem } : null })}><Pencil size={13}/><span>Editar item</span></button>
+        <div className="history-card-header">
+          <span className="history-card-market">
+            <Store size={15} />
+            <b>{entry.purchase.marketName}</b>
+          </span>
+          <span className="history-card-date">{shortDate(entry.purchase.purchasedAt)}</span>
+        </div>
+        <div className="history-card-body">
+          <div className="history-card-details">
+            <span className="history-variant-tag">{variantDesc || 'Sem variedade'}</span>
+            {originalName && <small className="history-original-name" title={`Na nota fiscal: ${originalName}`}>Na nota: {originalName}</small>}
+          </div>
+          <div className="history-card-pricing">
+            <div className="history-price-main">
+              <strong>{money(unitPrice)}</strong>
+              <span className="history-unit-label">/ {entry.item.packageUnit || 'un'}</span>
+            </div>
+            {quantity > 1 && (
+              <div className="history-price-sub">
+                <span>{quantity} un.</span>
+                <small>total {money(entry.item.totalPrice)}</small>
+              </div>
+            )}
+            {normalized && (
+              <span className="history-normalized-badge">
+                {money(normalized.value)} / {normalized.unit}
+              </span>
+            )}
+          </div>
+        </div>
+        <div className="history-card-actions">
+          <button type="button" className="history-action-btn" title="Ver compra completa" aria-label="Ver compra" onClick={() => onOpenModal?.({ type: 'purchase-detail', purchase: entry.purchase, backModal: listItem ? { type: 'item', item: listItem } : null })}><Store size={14}/><span>Ver compra</span></button>
+          <button type="button" className="history-action-btn" title="Editar este item da compra" aria-label="Editar item da compra" onClick={() => onOpenModal?.({ type: 'edit-purchase-item', purchase: entry.purchase, item: entry.item, backModal: listItem ? { type: 'item', item: listItem } : null })}><Pencil size={14}/><span>Editar item</span></button>
         </div>
       </article>
     })}</div> : <Empty icon={CircleDollarSign} title="Nenhum preço nesta variedade" text="Escolha outra variedade ou registre uma nova compra."/>}
@@ -776,24 +803,47 @@ function VariantDetailModal({ product, variant, state, onClose, onEditVariant, o
         <div className="item-price-history-list">
           {stats.history.map(({ purchase, item }) => {
             const unitPrice = Number(item.unitPrice) || Number(item.totalPrice) / (Number(item.quantity) || 1)
+            const quantity = Number(item.quantity) || 1
             const normalized = normalizedPrice(item)
             const originalName = item.originalDescription || item.importedProductName
+            const variantDesc = [item.variety, item.brand, `${item.packageSize} ${item.packageUnit}`].filter(Boolean).join(' · ')
             return (
               <article key={`${purchase.id}-${item.id}`} className="history-item-row">
-                <span className="price-history-date">
-                  <b>{shortDate(purchase.purchasedAt)}</b>
-                  <small>{purchase.marketName}</small>
-                </span>
-                <span className="price-history-variant">
-                  <b>{item.quantity} × {item.packageSize} {item.packageUnit}</b>
-                  {originalName && <small className="history-original-name" title={`Na nota fiscal: ${originalName}`}>Na nota: {originalName}</small>}
-                  {normalized && <small>{money(normalized.value)} / {normalized.unit}</small>}
-                </span>
-                <span className="price-history-value">
-                  <strong>{money(unitPrice)}</strong>
-                  {Number(item.quantity) !== 1 && <small>total {money(item.totalPrice)}</small>}
-                </span>
-                <div className="history-item-actions">
+                <div className="history-card-header">
+                  <span className="history-card-market">
+                    <Store size={15} />
+                    <b>{purchase.marketName}</b>
+                  </span>
+                  <span className="history-card-date">{shortDate(purchase.purchasedAt)}</span>
+                </div>
+                <div className="history-card-body">
+                  <div className="history-card-details">
+                    <span className="history-variant-tag">{variantDesc || `${quantity} × ${item.packageSize} ${item.packageUnit}`}</span>
+                    {originalName && (
+                      <small className="history-original-name" title={`Na nota fiscal: ${originalName}`}>
+                        Na nota: {originalName}
+                      </small>
+                    )}
+                  </div>
+                  <div className="history-card-pricing">
+                    <div className="history-price-main">
+                      <strong>{money(unitPrice)}</strong>
+                      <span className="history-unit-label">/ {item.packageUnit || 'un'}</span>
+                    </div>
+                    {quantity > 1 && (
+                      <div className="history-price-sub">
+                        <span>{quantity} un.</span>
+                        <small>total {money(item.totalPrice)}</small>
+                      </div>
+                    )}
+                    {normalized && (
+                      <span className="history-normalized-badge">
+                        {money(normalized.value)} / {normalized.unit}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="history-card-actions">
                   <button
                     type="button"
                     className="history-action-btn"
@@ -801,7 +851,7 @@ function VariantDetailModal({ product, variant, state, onClose, onEditVariant, o
                     aria-label="Ver compra"
                     onClick={() => onOpenModal?.({ type: 'purchase-detail', purchase, backModal: { type: 'product-detail', product } })}
                   >
-                    <Store size={13} />
+                    <Store size={14} />
                     <span>Ver compra</span>
                   </button>
                   <button
@@ -811,7 +861,7 @@ function VariantDetailModal({ product, variant, state, onClose, onEditVariant, o
                     aria-label="Editar item da compra"
                     onClick={() => onOpenModal?.({ type: 'edit-purchase-item', purchase, item, backModal: { type: 'product-detail', product } })}
                   >
-                    <Pencil size={13} />
+                    <Pencil size={14} />
                     <span>Editar item</span>
                   </button>
                 </div>
@@ -1069,41 +1119,68 @@ function ProductDetailPanel({ product, state, onClose, onEdit, onOpenModal }) {
       {history.length ? (
         <div className="product-detail-history">
           {(showAllPurchases ? history : history.slice(0, 10)).map(({ purchase, item }) => {
+            const unitPrice = Number(item.unitPrice) || Number(item.totalPrice) / (Number(item.quantity) || 1)
+            const quantity = Number(item.quantity) || 1
             const normalized = normalizedPrice(item)
             const variantTag = [item.variety, item.brand, `${item.packageSize} ${item.packageUnit}`].filter(Boolean).join(' · ')
             const originalName = item.originalDescription || item.importedProductName
             return (
               <article key={`${purchase.id}-${item.id}`} className="product-detail-history-row">
-                <div className="product-detail-history-info">
-                  <b>{purchase.marketName}</b>
-                  <small>{shortDate(purchase.purchasedAt)} · <span className="history-variant-tag">{variantTag || 'Sem variação'}</span></small>
-                  {originalName && <small className="history-original-name" title={`Na nota fiscal: ${originalName}`}>Na nota: {originalName}</small>}
-                  {normalized && <em>{money(normalized.value)} / {normalized.unit}</em>}
+                <div className="history-card-header">
+                  <span className="history-card-market">
+                    <Store size={15} />
+                    <b>{purchase.marketName}</b>
+                  </span>
+                  <span className="history-card-date">{shortDate(purchase.purchasedAt)}</span>
                 </div>
-                <div className="product-detail-history-side">
-                  <strong>{money(item.totalPrice)}</strong>
-                  <div className="history-item-actions">
-                    <button
-                      type="button"
-                      className="history-action-btn"
-                      title="Ver compra completa"
-                      aria-label="Ver compra"
-                      onClick={() => onOpenModal?.({ type: 'purchase-detail', purchase, backModal: { type: 'product-detail', product } })}
-                    >
-                      <Store size={13} />
-                      <span>Ver compra</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="history-action-btn"
-                      title="Editar este item da compra"
-                      aria-label="Editar item da compra"
-                      onClick={() => onOpenModal?.({ type: 'edit-purchase-item', purchase, item, backModal: { type: 'product-detail', product } })}
-                    >
-                      <Pencil size={13} />
-                      <span>Editar item</span>
-                    </button>
+                <div className="history-card-body">
+                  <div className="history-card-details">
+                    <span className="history-variant-tag">{variantTag || 'Sem variação'}</span>
+                    {originalName && (
+                      <small className="history-original-name" title={`Na nota fiscal: ${originalName}`}>
+                        Na nota: {originalName}
+                      </small>
+                    )}
                   </div>
+                  <div className="history-card-pricing">
+                    <div className="history-price-main">
+                      <strong>{money(unitPrice)}</strong>
+                      <span className="history-unit-label">/ {item.packageUnit || 'un'}</span>
+                    </div>
+                    {quantity > 1 && (
+                      <div className="history-price-sub">
+                        <span>{quantity} un.</span>
+                        <small>total {money(item.totalPrice)}</small>
+                      </div>
+                    )}
+                    {normalized && (
+                      <span className="history-normalized-badge">
+                        {money(normalized.value)} / {normalized.unit}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="history-card-actions">
+                  <button
+                    type="button"
+                    className="history-action-btn"
+                    title="Ver compra completa"
+                    aria-label="Ver compra"
+                    onClick={() => onOpenModal?.({ type: 'purchase-detail', purchase, backModal: { type: 'product-detail', product } })}
+                  >
+                    <Store size={14} />
+                    <span>Ver compra</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="history-action-btn"
+                    title="Editar este item da compra"
+                    aria-label="Editar item da compra"
+                    onClick={() => onOpenModal?.({ type: 'edit-purchase-item', purchase, item, backModal: { type: 'product-detail', product } })}
+                  >
+                    <Pencil size={14} />
+                    <span>Editar item</span>
+                  </button>
                 </div>
               </article>
             )
@@ -1698,7 +1775,7 @@ function MergeSuggestionsModal({ state, onClose, onMergePair }) {
               const rightVars = normalizeProductVariants(right.variants)
 
               return (
-                <div className="suggestion-card" key={suggestion.id}>
+                <div className="merge-suggestion-card" key={suggestion.id}>
                   <div className="suggestion-header">
                     <span className={`confidence-tag confidence-${suggestion.confidence}`}>
                       {suggestion.confidence === 'high' ? 'Alta similaridade' : 'Similaridade moderada'}
