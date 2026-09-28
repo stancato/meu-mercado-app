@@ -45,6 +45,10 @@ export default function App({ user }) {
         : systemTheme.matches ? 'dark' : 'light'
       document.documentElement.dataset.theme = theme
       document.documentElement.style.colorScheme = theme
+      const metaThemeColor = document.querySelector('meta[name="theme-color"]')
+      if (metaThemeColor) {
+        metaThemeColor.setAttribute('content', theme === 'light' ? '#f7f5ff' : '#0d1022')
+      }
     }
     applyTheme()
     if (themePreference === 'system') systemTheme.addEventListener('change', applyTheme)

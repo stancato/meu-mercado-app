@@ -24,7 +24,7 @@ export function Field({ label, children, hint }) {
 
 export function Toast({ message, onClose }) {
   if (!message) return null
-  return <button className="toast" onClick={onClose}>{message}</button>
+  return <button className="toast" onClick={onClose} role="status" aria-live="polite">{message}</button>
 }
 
 export function SearchableSelect({
