@@ -10,6 +10,7 @@ const SHELL = [
   '/icon-maskable-192.png',
   '/icon-maskable-512.png',
   '/apple-touch-icon.png',
+  '/apple-touch-icon-precomposed.png',
   '/favicon-32x32.png',
   '/favicon-16x16.png',
 ]

@@ -59,8 +59,15 @@ async function generate() {
 
   await sharp(Buffer.from(svgApple))
     .resize(180, 180)
+    .removeAlpha()
     .png()
     .toFile(resolve(publicDir, 'apple-touch-icon.png'))
+
+  await sharp(Buffer.from(svgApple))
+    .resize(180, 180)
+    .removeAlpha()
+    .png()
+    .toFile(resolve(publicDir, 'apple-touch-icon-precomposed.png'))
 
   await sharp(Buffer.from(svgOriginal))
     .resize(32, 32)

@@ -1,6 +1,6 @@
 {
   "name": "Meu Mercado",
-  "short_name": "Mercado",
+  "short_name": "Meu Mercado",
   "description": "Listas de compras e comparação de preços.",
   "lang": "pt-BR",
   "start_url": "/",
@@ -11,9 +11,9 @@
   "theme_color": "#18a567",
   "icons": [
     {
-      "src": "/icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
       "purpose": "any"
     },
     {
