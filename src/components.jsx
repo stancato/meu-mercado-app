@@ -39,6 +39,7 @@ export function SearchableSelect({
 }) {
   const [isOpen, setIsOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [hasTyped, setHasTyped] = useState(false)
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
   const containerRef = useRef(null)
   const inputRef = useRef(null)
@@ -51,11 +52,13 @@ export function SearchableSelect({
   useEffect(() => {
     if (!isOpen) {
       setQuery(selectedOption ? selectedOption.label : '')
+      setHasTyped(false)
     }
   }, [selectedOption, isOpen])
 
   const filteredOptions = useMemo(() => {
-    if (!query.trim() || !isOpen) {
+    if (!isOpen) return options
+    if (!hasTyped || !query.trim()) {
       return options
     }
     const norm = normalizeText(query)
@@ -65,13 +68,14 @@ export function SearchableSelect({
       const subNorm = normalizeText(opt.subtitle || '')
       return labelNorm.includes(norm) || subNorm.includes(norm)
     })
-  }, [options, query, isOpen])
+  }, [options, query, isOpen, hasTyped])
 
   useEffect(() => {
     const handlePointerDown = (event) => {
       if (containerRef.current && !containerRef.current.contains(event.target)) {
         setIsOpen(false)
         setQuery(selectedOption ? selectedOption.label : '')
+        setHasTyped(false)
       }
     }
     if (isOpen) {
@@ -86,6 +90,7 @@ export function SearchableSelect({
     if (opt.disabled) return
     onChange(opt.value)
     setQuery(opt.label)
+    setHasTyped(false)
     setIsOpen(false)
     setHighlightedIndex(-1)
   }
@@ -118,6 +123,7 @@ export function SearchableSelect({
       event.preventDefault()
       setIsOpen(false)
       setQuery(selectedOption ? selectedOption.label : '')
+      setHasTyped(false)
       inputRef.current?.blur()
     }
   }
@@ -130,6 +136,15 @@ export function SearchableSelect({
       }
     }
   }, [highlightedIndex, isOpen])
+
+  useEffect(() => {
+    if (isOpen && listRef.current && selectedOption) {
+      const selectedEl = listRef.current.querySelector('.searchable-select-option.selected')
+      if (selectedEl) {
+        selectedEl.scrollIntoView({ block: 'nearest' })
+      }
+    }
+  }, [isOpen, selectedOption])
 
   return (
     <div
@@ -149,11 +164,13 @@ export function SearchableSelect({
           value={isOpen ? query : (selectedOption?.label || '')}
           onChange={(e) => {
             setQuery(e.target.value)
+            setHasTyped(true)
             if (!isOpen) setIsOpen(true)
             setHighlightedIndex(-1)
           }}
           onFocus={(e) => {
             if (!disabled) {
+              setHasTyped(false)
               setIsOpen(true)
               e.target.select()
             }
@@ -170,6 +187,7 @@ export function SearchableSelect({
               onClick={(e) => {
                 e.stopPropagation()
                 setQuery('')
+                setHasTyped(true)
                 inputRef.current?.focus()
               }}
             >
@@ -188,7 +206,9 @@ export function SearchableSelect({
                 if (isOpen) {
                   setIsOpen(false)
                   setQuery(selectedOption ? selectedOption.label : '')
+                  setHasTyped(false)
                 } else {
+                  setHasTyped(false)
                   setIsOpen(true)
                   inputRef.current?.focus()
                 }

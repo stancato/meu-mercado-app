@@ -2488,9 +2488,9 @@ function ProductMatchEditor({ item, items, setItems, products }) {
         <span>2. Variação no catálogo</span>
         <SearchableSelect
           disabled={!selected}
-          value={selected ? (matchingVariant?.id || 'new') : ''}
+          value={matchingVariant ? matchingVariant.id : ''}
           options={variantOptions}
-          placeholder={selected ? 'Buscar variação...' : 'Selecione primeiro o produto'}
+          placeholder={selected ? 'Cadastrar como nova variação' : 'Selecione primeiro o produto'}
           onChange={(val) => {
             const variant = variants.find((saved) => saved.id === val)
             if (variant) selectVariant(variant)
@@ -2556,7 +2556,7 @@ function EditPurchaseItemModal({ purchase, item: initialItem, state, onClose, on
       const match = normalizeProductVariants(initialProduct.variants).find((v) => variantMatchesItem(v, initialItem))
       if (match) return match.id
     }
-    return 'new'
+    return ''
   })
 
   const [itemData, setItemData] = useState({
@@ -2582,7 +2582,7 @@ function EditPurchaseItemModal({ purchase, item: initialItem, state, onClose, on
   const handleProductChange = (newProdId) => {
     setTargetProductId(newProdId)
     if (newProdId === 'new') {
-      setTargetVariantId('new')
+      setTargetVariantId('')
       setItemData((curr) => ({
         ...curr,
         productName: curr.productName || initialItem.productName || '',
@@ -2606,7 +2606,7 @@ function EditPurchaseItemModal({ purchase, item: initialItem, state, onClose, on
             barcode: matching.barcode || curr.barcode,
           }))
         } else {
-          setTargetVariantId('new')
+          setTargetVariantId('')
           setItemData((curr) => ({
             ...curr,
             productName: prod.name,
@@ -2618,8 +2618,8 @@ function EditPurchaseItemModal({ purchase, item: initialItem, state, onClose, on
   }
 
   const handleVariantChange = (newVarId) => {
-    setTargetVariantId(newVarId)
-    if (newVarId !== 'new' && selectedProduct) {
+    setTargetVariantId(newVarId === 'new' ? '' : newVarId)
+    if (newVarId && newVarId !== 'new' && selectedProduct) {
       const variant = productVariants.find((v) => v.id === newVarId)
       if (variant) {
         setItemData((curr) => ({
@@ -2676,7 +2676,7 @@ function EditPurchaseItemModal({ purchase, item: initialItem, state, onClose, on
       purchaseId: purchase.id,
       itemId: initialItem.id,
       targetProductId,
-      targetVariantId,
+      targetVariantId: targetVariantId || 'new',
       itemData,
       createVariantInProduct: true,
     })
@@ -2743,14 +2743,14 @@ function EditPurchaseItemModal({ purchase, item: initialItem, state, onClose, on
               <span>2. Variação no catálogo</span>
               <SearchableSelect
                 disabled={targetProductId === 'new'}
-                value={targetVariantId}
+                value={targetVariantId === 'new' ? '' : targetVariantId}
                 options={variantOptions}
-                placeholder={targetProductId === 'new' ? 'Nova variação do novo produto' : 'Buscar variação...'}
+                placeholder={targetProductId === 'new' ? 'Nova variação do novo produto' : '➕ Criar como nova variedade neste produto'}
                 onChange={(val) => handleVariantChange(val)}
               />
             </label>
           </div>
-          {targetProductId !== 'new' && targetVariantId === 'new' && (
+          {targetProductId !== 'new' && (!targetVariantId || targetVariantId === 'new') && (
             <small className="mapping-explanation" style={{ marginTop: '8px', display: 'block' }}>
               💡 Os dados abaixo (sabor, marca, tamanho) serão salvos como nova variedade no produto <b>{selectedProduct?.name}</b>.
             </small>
