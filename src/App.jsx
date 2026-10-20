@@ -1,24 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Apple, Archive, ArrowLeftRight, BarChart3, Bath, Beef, CalendarClock, Camera, Check, CheckCircle2, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, Eye, EyeOff, FileJson, GitMerge, Globe, LayoutGrid, List, ListChecks, Loader2, LogIn, LogOut, Milk, Minus, Moon, Package, PackageCheck, PackagePlus, PackageSearch, Pencil, Plus, QrCode, ReceiptText, RotateCcw, Search, Settings, Share2, ShoppingBasket, Sparkles, SprayCan, Store, Sun, Tags, Trash2, TrendingUp, X } from 'lucide-react'
+import { AlertTriangle, Apple, Archive, ArrowLeftRight, BarChart3, Bath, Beef, CalendarClock, Camera, Check, CheckCircle2, ChevronRight, CircleDollarSign, ClipboardCopy, Cloud, CloudOff, Coffee, CupSoda, Eye, EyeOff, FileJson, Flame, GitMerge, Globe, LayoutGrid, List, ListChecks, Loader2, LogIn, LogOut, Milk, Minus, Moon, Package, PackageCheck, PackagePlus, PackageSearch, Pencil, Plus, QrCode, ReceiptText, RotateCcw, Search, Settings, Share2, ShoppingBasket, Sparkles, SprayCan, Store, Sun, Tags, Trash2, TrendingUp, X } from 'lucide-react'
 import { signOut } from 'firebase/auth'
 import { auth, firebaseReady, loginWithGoogle } from './firebase'
-import { CATEGORIES, RECEIPT_PROMPT, UNITS, buildReceiptPrompt, buildReceiptPromptFromNfce, dateTimeLocal, defaultUnitForProduct, fetchNfceFromUrl, findDuplicateProductSuggestions, findMatchingVariant, mergeProductVariants, money, normalizeImport, normalizeProductVariants, normalizeText, normalizedPrice, nowIso, onlyDigits, parseJsonInput, parseNfceHtml, promoteVariantToProduct, shortDate, suggestNewProductName, uid, updatePurchaseItem } from './data'
+import { CATEGORIES, PERIODICITY_OPTIONS, RECEIPT_PROMPT, UNITS, buildDismissedPairKey, buildReceiptPrompt, buildReceiptPromptFromNfce, categoryDefaultDays, combineProductVariants, dateTimeLocal, defaultUnitForProduct, fetchNfceFromUrl, findDuplicateProductSuggestions, findMatchingVariant, findPeriodicitySuggestions, inferredVariantValue, mergeCatalogProducts, mergeProductVariants, money, nextPurchaseSuggestions, normalizeImport, normalizeProductVariants, normalizeText, normalizedPrice, nowIso, onlyDigits, parseJsonInput, parseNfceHtml, periodicityInfo, periodicityLabel, promoteVariantToProduct, shortDate, suggestNewProductName, uid, updatePurchaseItem } from './data'
 import { Empty, Field, Modal, SearchableSelect, Toast } from './components'
 import { useStore } from './store'
 import { QrScannerModal } from './QrScanner'
 
 const NAV = [
   ['lists', 'Lista', ListChecks], ['purchases', 'Compras', ReceiptText], ['prices', 'Analytics', BarChart3], ['products', 'Produtos', PackageSearch], ['settings', 'Ajustes', Settings],
-]
-
-const PERIODICITY_OPTIONS = [
-  { value: 'auto', label: 'Automática' },
-  { value: '7', label: 'Semanal' },
-  { value: '14', label: 'A cada 2 semanas' },
-  { value: '30', label: 'Mensal' },
-  { value: '60', label: 'A cada 2 meses' },
-  { value: '90', label: 'A cada 3 meses' },
-  { value: '0', label: 'Só quando eu quiser' },
 ]
 
 const ANALYTICS_PERIODS = [
@@ -102,7 +92,7 @@ export default function App({ user }) {
       {tab === 'lists' && <ShoppingListPage state={state} mutate={mutate} open={setModal} />}
       {tab === 'purchases' && <PurchasesPage state={state} open={setModal} />}
       {tab === 'prices' && <AnalyticsPage state={state} />}
-      {tab === 'products' && <ProductsPage state={state} mutate={mutate} open={setModal} />}
+      {tab === 'products' && <ProductsPage state={state} mutate={mutate} open={setModal} toast={setToast} />}
       {tab === 'settings' && <SettingsPage state={state} mutate={mutate} user={user} open={setModal} toast={setToast} syncNow={syncNow} />}
     </main>
 
@@ -123,12 +113,13 @@ export default function App({ user }) {
       setModal(null); setToast('Produto atualizado no catálogo.')
     }} />}
     {modal?.type === 'product-detail' && <ProductDetailPanel product={state.products.find((p) => p.id === modal.product.id) || modal.product} state={state} onClose={() => setModal(null)} onEdit={(opts) => setModal({ type: 'product', product: modal.product, ...opts })} onOpenModal={setModal} />}
-    {modal?.type === 'merge-suggestions' && <MergeSuggestionsModal state={state} onClose={() => setModal(null)} onMergePair={(p1, p2) => setModal({ type: 'merge-products', products: [p1, p2], backModal: { type: 'merge-suggestions' } })} />}
-    {modal?.type === 'merge-products' && <ProductMergeModal initialLeft={modal.products[0]} initialRight={modal.products[1]} onClose={() => setModal(modal.backModal || null)} onMerge={(plan) => { mutate((current) => mergeCatalogProducts(current, plan)); setModal(modal.backModal || null); setToast('Produtos normalizados e histórico atualizado.') }} />}
+    {modal?.type === 'merge-suggestions' && <MergeSuggestionsModal state={state} mutate={mutate} toast={setToast} onClose={() => setModal(null)} onMergePair={(p1, p2, suggestionType) => setModal({ type: 'merge-products', products: [p1, p2], suggestionType, backModal: { type: 'merge-suggestions' } })} />}
+    {modal?.type === 'periodicity-suggestions' && <PeriodicitySuggestionsModal state={state} mutate={mutate} toast={setToast} onClose={() => setModal(null)} />}
+    {modal?.type === 'merge-products' && <ProductMergeModal initialLeft={state.products.find((p) => p.id === modal.products[0]?.id) || modal.products[0]} initialRight={state.products.find((p) => p.id === modal.products[1]?.id) || modal.products[1]} suggestionType={modal.suggestionType} state={state} onClose={() => setModal(modal.backModal || null)} onMerge={(plan) => { mutate((current) => mergeCatalogProducts(current, plan)); setModal(modal.backModal || null); setToast('Produtos normalizados e histórico atualizado.') }} />}
     {modal?.type === 'merge-variants' && <VariantMergeModal product={state.products.find((p) => p.id === modal.product.id) || modal.product} initialSourceVariant={modal.variant} state={state} onClose={() => setModal(null)} onMerge={(plan) => { mutate((current) => mergeProductVariants(current, plan)); setModal(null); setToast('Variações unificadas e histórico atualizado.') }} />}
     {modal?.type === 'variant-to-product' && <VariantToProductModal product={state.products.find((p) => p.id === modal.product.id) || modal.product} variant={modal.variant} state={state} onClose={() => setModal(null)} onPromote={(plan) => { mutate((current) => promoteVariantToProduct(current, plan)); setModal(null); setToast('Variação transformada em produto com sucesso.') }} />}
-    {modal?.type === 'import' && <ImportModal products={state.products} toast={setToast} onClose={() => setModal(null)} onReview={(draft) => setModal({ type: 'review', draft: prepareDraftProductMatches({ ...draft, source: 'json' }, state.products, state.productMappings) })} onOpenPrompt={() => setModal({ type: 'prompt', initialWithCatalog: true })} />}
-    {modal?.type === 'manual' && <ManualPurchaseModal markets={state.markets} onClose={() => setModal(null)} onReview={(draft) => setModal({ type: 'review', draft: prepareDraftProductMatches({ ...draft, source: 'manual' }, state.products, state.productMappings) })} />}
+    {modal?.type === 'import' && <ImportModal products={state.products} toast={setToast} onClose={() => setModal(null)} onReview={(draft) => setModal({ type: 'review', draft: prepareDraftProductMatches({ ...draft, source: 'json' }, state.products, state.productMappings, state.productNormalizations) })} onOpenPrompt={() => setModal({ type: 'prompt', initialWithCatalog: true })} />}
+    {modal?.type === 'manual' && <ManualPurchaseModal markets={state.markets} onClose={() => setModal(null)} onReview={(draft) => setModal({ type: 'review', draft: prepareDraftProductMatches({ ...draft, source: 'manual' }, state.products, state.productMappings, state.productNormalizations) })} />}
     {modal?.type === 'review' && <ReviewModal draft={modal.draft} products={state.products} onClose={() => setModal(null)} onSave={finishPurchase} />}
     {modal?.type === 'purchase-detail' && <PurchaseDetail purchase={state.purchases.find((p) => p.id === modal.purchase.id) || modal.purchase} market={state.markets.find((market) => market.id === modal.purchase.marketId)} onClose={() => setModal(modal.backModal || null)} onBack={modal.backModal ? () => setModal(modal.backModal) : null} onEdit={() => setModal({ type: 'edit-purchase', purchase: modal.purchase, market: state.markets.find((market) => market.id === modal.purchase.marketId), backModal: modal.backModal })} onEditItem={(item) => setModal({ type: 'edit-purchase-item', purchase: modal.purchase, item, backModal: { type: 'purchase-detail', purchase: modal.purchase, backModal: modal.backModal } })} onDelete={() => setModal({ type: 'delete-purchase', purchase: modal.purchase })} />}
     {modal?.type === 'edit-purchase' && <EditPurchaseModal purchase={modal.purchase} market={modal.market} onClose={() => setModal(modal.backModal || null)} onSave={({ market, purchasedAt }) => { mutate((current) => updatePurchaseDetails(current, modal.purchase, market, purchasedAt)); setModal(modal.backModal || null); setToast('Compra atualizada e histórico recalculado.') }} />}
@@ -158,7 +149,7 @@ export default function App({ user }) {
 
 function PageHeader({ title, action }) { return <div className="page-header"><div><h1>{title}</h1></div>{action}</div> }
 
-const CATEGORY_ICONS = { Hortifruti: Apple, Mercearia: Coffee, Frios: Milk, Carnes: Beef, Bebidas: CupSoda, Limpeza: SprayCan, Higiene: Bath, Outros: Package }
+const CATEGORY_ICONS = { Hortifruti: Apple, Mercearia: Coffee, Frios: Milk, Carnes: Beef, Bebidas: CupSoda, Limpeza: SprayCan, Higiene: Bath, Temperos: Flame, Outros: Package }
 function CategoryIcon({ category, size = 20 }) { const Icon = CATEGORY_ICONS[category] || Package; return <span className={`category-icon category-${categoryKey(category)}`}><Icon size={size}/></span> }
 
 function ShoppingListPage({ state, mutate, open }) {
@@ -188,15 +179,19 @@ function ShoppingListPage({ state, mutate, open }) {
     const hasHistory = hasPurchaseHistory(state, product)
     const initialQty = customQuantity != null ? customQuantity : lastQty
     const newItem = productToListItem(product, initialQty)
-    const productKey = normalizeText(product.name)
     mutate((s) => {
-      const existsInCatalog = s.products.some((saved) => normalizeText(saved.name) === productKey)
+      const canonical = canonicalProductForItem(s, { productId: product.id, name: product.name })
+      const targetId = canonical?.id
+      const existsInCatalog = Boolean(targetId)
+      const listItemToSave = canonical
+        ? { ...newItem, productId: canonical.id, name: canonical.name, category: canonical.category || newItem.category }
+        : newItem
       return {
         ...s,
         products: existsInCatalog
-          ? s.products.map((saved) => normalizeText(saved.name) === productKey ? { ...saved, archivedAt: null } : saved)
-          : [...s.products, { ...product, archivedAt: null }],
-        lists: s.lists.map((current) => ({ ...current, items: [...current.items, newItem] })),
+          ? s.products.map((saved) => saved.id === targetId ? { ...saved, archivedAt: null, mergedIntoId: null, updatedAt: nowIso() } : saved)
+          : [...s.products, { ...product, archivedAt: null, createdAt: nowIso(), updatedAt: nowIso() }],
+        lists: s.lists.map((current) => ({ ...current, items: [...current.items, listItemToSave] })),
       }
     })
     setDrawerItem({
@@ -241,6 +236,15 @@ function ShoppingListPage({ state, mutate, open }) {
   const pendingItems = list.items.filter((item) => !item.checked)
   const completedItems = list.items.filter((item) => item.checked)
   const estimate = useMemo(() => estimateShoppingList(state, list), [state, list])
+  const suggestions = useMemo(() => nextPurchaseSuggestions(state, list), [state, list])
+  const addSuggestedProducts = (productsToAdd) => {
+    const included = new Set(list.items.map(listItemSelectionKey))
+    productsToAdd.forEach((product) => {
+      if (!included.has(productSelectionKey(product))) {
+        addProduct(product)
+      }
+    })
+  }
   const groups = CATEGORIES.map((category) => ({ category, items: pendingItems.filter((item) => category === 'Outros' ? !CATEGORIES.includes(item.category || 'Outros') || (item.category || 'Outros') === 'Outros' : item.category === category) }))
     .filter((group) => group.items.length)
   const clearCompleted = () => mutate((s) => ({ ...s, lists: s.lists.map((current) => ({ ...current, items: current.items.filter((item) => !item.checked) })) }))
@@ -249,7 +253,6 @@ function ShoppingListPage({ state, mutate, open }) {
       <InlineProductSearch
         products={state.products}
         list={list}
-        state={state}
         onAdd={addProduct}
         topBar={drawerItem ? (
           <TopQuantityBar
@@ -261,6 +264,12 @@ function ShoppingListPage({ state, mutate, open }) {
         ) : null}
       />
     </div>
+    <NextPurchaseSuggestionsSection
+      suggestions={suggestions}
+      list={list}
+      onAdd={addProduct}
+      onAddAll={addSuggestedProducts}
+    />
     <div className="toolbar shopping-list-toolbar"><span className="list-count">{list.items.length} {list.items.length === 1 ? 'item' : 'itens'}</span><div className="list-view-actions">{list.items.length > 0 && <button className="share-list-button" aria-label="Compartilhar lista" title="Compartilhar lista" onClick={() => open({ type: 'share-list' })}><Share2 size={16}/><span>Compartilhar</span></button>}<button className={`group-toggle ${groupByCategory ? 'active' : ''}`} aria-label="Agrupar por categoria" title="Agrupar por categoria" aria-pressed={groupByCategory} onClick={() => setGroupByCategory((current) => !current)}><Tags size={16}/><span>Agrupar por categoria</span></button><div className="view-toggle" aria-label="Modo de visualização"><button className={viewMode === 'list' ? 'active' : ''} title="Visualizar em lista" aria-label="Visualizar em lista" aria-pressed={viewMode === 'list'} onClick={() => setViewMode('list')}><List size={18}/></button><button className={viewMode === 'grid' ? 'active' : ''} title="Visualizar em grade" aria-label="Visualizar em grade" aria-pressed={viewMode === 'grid'} onClick={() => setViewMode('grid')}><LayoutGrid size={18}/></button></div></div></div>
     {list.items.length > 0 && <section className={`shopping-estimate ${estimate.pricedCount ? '' : 'empty'}`} aria-label="Estimativa do valor da compra">
       <span className="shopping-estimate-icon"><CircleDollarSign size={18}/></span>
@@ -412,7 +421,7 @@ function PriceSparkline({ history }) {
   </div>
 }
 
-function ProductsPage({ state, mutate, open }) {
+function ProductsPage({ state, mutate, open, toast }) {
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState([])
   const [bulkPeriodicity, setBulkPeriodicity] = useState('30')
@@ -422,20 +431,56 @@ function ProductsPage({ state, mutate, open }) {
   })
   useEffect(() => localStorage.setItem('products-grouping', productGrouping), [productGrouping])
   useEffect(() => setSelected((current) => current.filter((id) => state.products.some((product) => product.id === id && !product.archivedAt))), [state.products])
-  const duplicateSuggestions = useMemo(() => findDuplicateProductSuggestions(state.products), [state.products])
+  const duplicateSuggestions = useMemo(
+    () => findDuplicateProductSuggestions(state.products, { dismissedMergePairs: state.dismissedMergePairs }),
+    [state.products, state.dismissedMergePairs]
+  )
+  const periodicitySuggestions = useMemo(
+    () => findPeriodicitySuggestions(state),
+    [state]
+  )
+  const periodicitySuggestionByProductId = useMemo(
+    () => new Map(periodicitySuggestions.map((s) => [s.productId, s])),
+    [periodicitySuggestions]
+  )
   const products = state.products
     .filter((p) => !p.archivedAt && normalizeText(`${p.name} ${(p.brands || []).join(' ')}`).includes(normalizeText(query)))
     .sort((first, second) => first.name.localeCompare(second.name, 'pt-BR', { sensitivity: 'base' }))
   const selectedSet = new Set(selected)
   const setProductPeriodicity = (ids, value) => mutate((current) => ({
     ...current,
-    products: current.products.map((product) => ids.includes(product.id) ? { ...product, recurrenceDays: value === 'auto' ? null : Number(value) } : product),
+    products: current.products.map((product) => ids.includes(product.id) ? { ...product, recurrenceDays: value === 'auto' ? null : Number(value), dismissedRecurrenceSuggestion: null, updatedAt: nowIso() } : product),
   }))
-  const toggle = (id) => setSelected((current) => current.includes(id) ? current.filter((saved) => saved !== id) : [...current, id])
-  const archiveProduct = (id) => {
+  const acceptPeriodicitySuggestion = (productId, suggestedDays, productName) => {
+    const now = nowIso()
     mutate((current) => ({
       ...current,
-      products: current.products.map((product) => product.id === id ? { ...product, archivedAt: nowIso() } : product),
+      products: current.products.map((product) =>
+        product.id === productId
+          ? { ...product, recurrenceDays: Number(suggestedDays), dismissedRecurrenceSuggestion: null, updatedAt: now }
+          : product
+      ),
+    }))
+    toast?.(`Periodicidade de ${productName} atualizada para ${periodicityLabel(suggestedDays)}.`)
+  }
+  const dismissPeriodicitySuggestion = (productId, suggestedDays) => {
+    const now = nowIso()
+    mutate((current) => ({
+      ...current,
+      products: current.products.map((product) =>
+        product.id === productId
+          ? { ...product, dismissedRecurrenceSuggestion: Number(suggestedDays), updatedAt: now }
+          : product
+      ),
+    }))
+    toast?.('Sugestão de periodicidade dispensada.')
+  }
+  const toggle = (id) => setSelected((current) => current.includes(id) ? current.filter((saved) => saved !== id) : [...current, id])
+  const archiveProduct = (id) => {
+    const now = nowIso()
+    mutate((current) => ({
+      ...current,
+      products: current.products.map((product) => product.id === id ? { ...product, archivedAt: now, updatedAt: now } : product),
     }))
     setSelected((current) => current.filter((saved) => saved !== id))
   }
@@ -451,6 +496,7 @@ function ProductsPage({ state, mutate, open }) {
   const renderProduct = (product) => {
     const frequency = periodicityInfo(state, product)
     const variants = normalizeProductVariants(product.variants)
+    const periodicitySuggestion = periodicitySuggestionByProductId.get(product.id)
     const openDetails = () => open({ type: 'product-detail', product })
     return <article className={`product-card category-${categoryKey(product.category)} ${selectedSet.has(product.id) ? 'selected' : ''}`} key={product.id} role="button" tabIndex="0" aria-label={`Visualizar ${product.name}`} onClick={(event) => { if (!event.target.closest('button')) openDetails() }} onKeyDown={(event) => { if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return; event.preventDefault(); openDetails() }}>
       <div className="product-card-header">
@@ -460,6 +506,37 @@ function ProductsPage({ state, mutate, open }) {
         <div className="product-card-actions"><button className="icon-button archive-product" aria-label={`Arquivar ${product.name}`} title="Arquivar produto" onClick={() => archiveProduct(product.id)}><Archive size={17}/></button><span className="product-open-indicator" aria-hidden="true"><ChevronRight size={18}/></span></div>
       </div>
       {variants.length > 0 && <div className="product-card-body"><div className="product-variant-badges" aria-label="Variações do produto">{variants.map((variant) => <span key={variant.id}>{[variant.variety, variant.brand, `${variant.packageSize} ${variant.packageUnit}`].filter(Boolean).join(' · ') || 'Variação padrão'}</span>)}</div></div>}
+      {periodicitySuggestion && (
+        <div className="product-periodicity-banner" onClick={(e) => e.stopPropagation()}>
+          <div className="product-periodicity-banner-info">
+            <Sparkles size={13} />
+            <div>
+              <span>Sugestão: <b>{periodicitySuggestion.suggestedLabel}</b></span>
+              <small>{periodicitySuggestion.reason}</small>
+            </div>
+          </div>
+          <div className="product-periodicity-banner-actions">
+            <button
+              type="button"
+              className="periodicity-banner-accept"
+              title={`Mudar para ${periodicitySuggestion.suggestedLabel}`}
+              aria-label={`Mudar periodicidade de ${product.name} para ${periodicitySuggestion.suggestedLabel}`}
+              onClick={() => acceptPeriodicitySuggestion(product.id, periodicitySuggestion.suggestedDays, product.name)}
+            >
+              <Check size={13} /> Aceitar
+            </button>
+            <button
+              type="button"
+              className="periodicity-banner-dismiss"
+              title="Dispensar sugestão"
+              aria-label={`Dispensar sugestão para ${product.name}`}
+              onClick={() => dismissPeriodicitySuggestion(product.id, periodicitySuggestion.suggestedDays)}
+            >
+              <X size={13} />
+            </button>
+          </div>
+        </div>
+      )}
       <div className="product-card-footer"><span className="product-card-label"><CalendarClock size={14}/> Reposição</span><strong className="product-periodicity" title={product.recurrenceDays == null ? `Automática · ${frequency.label}` : frequency.label}>{compactPeriodicity(product, frequency)}</strong></div>
     </article>
   }
@@ -470,6 +547,7 @@ function ProductsPage({ state, mutate, open }) {
         <div className="search"><Search size={18}/><input placeholder="Produto ou marca" value={query} onChange={(e) => setQuery(e.target.value)}/>{query && <button className="search-clear" aria-label="Limpar busca de produtos" title="Limpar busca" onClick={() => setQuery('')}><X size={17}/></button>}</div>
         <div className="catalog-actions">
           <button className={`group-toggle find-duplicates-btn ${duplicateSuggestions.length > 0 ? 'has-badge' : ''}`} aria-label="Identificar repetições e sugerir mesclagens" title="Identificar repetições e sugerir mesclagens" onClick={() => open({ type: 'merge-suggestions' })}><Sparkles size={16}/><span>Identificar repetições</span>{duplicateSuggestions.length > 0 && <span className="duplicates-badge">{duplicateSuggestions.length}</span>}</button>
+          <button className={`group-toggle find-periodicity-btn ${periodicitySuggestions.length > 0 ? 'has-badge' : ''}`} aria-label="Sugestões de periodicidade baseadas nas compras" title="Sugestões de periodicidade baseadas nas compras" onClick={() => open({ type: 'periodicity-suggestions' })}><CalendarClock size={16}/><span>Sugerir periodicidade</span>{periodicitySuggestions.length > 0 && <span className="duplicates-badge">{periodicitySuggestions.length}</span>}</button>
           <button className={`group-toggle ${productGrouping === 'category' ? 'active' : ''}`} aria-label="Agrupar produtos por categoria" title="Agrupar por categoria" aria-pressed={productGrouping === 'category'} onClick={() => setProductGrouping((current) => current === 'category' ? '' : 'category')}><Tags size={16}/><span>Agrupar por categoria</span></button>
           <button className={`group-toggle ${productGrouping === 'periodicity' ? 'active' : ''}`} aria-label="Agrupar produtos por periodicidade" title="Agrupar por periodicidade" aria-pressed={productGrouping === 'periodicity'} onClick={() => setProductGrouping((current) => current === 'periodicity' ? '' : 'periodicity')}><CalendarClock size={16}/><span>Agrupar por periodicidade</span></button>
           <button className="ghost select-visible" aria-label={allVisibleSelected ? 'Desmarcar produtos visíveis' : 'Selecionar produtos visíveis'} title={allVisibleSelected ? 'Desmarcar visíveis' : 'Selecionar visíveis'} onClick={() => setSelected(allVisibleSelected ? selected.filter((id) => !products.some((product) => product.id === id)) : [...new Set([...selected, ...products.map((product) => product.id)])])}><Check size={16}/><span>{allVisibleSelected ? 'Desmarcar visíveis' : 'Selecionar visíveis'}</span></button>
@@ -512,7 +590,7 @@ function SettingsPage({ state, mutate, user, open, toast, syncNow }) {
   </div></>
 }
 
-function InlineProductSearch({ products, list, state, onAdd, topBar = null }) {
+function InlineProductSearch({ products, list, onAdd, topBar = null }) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const containerRef = useRef(null)
@@ -534,8 +612,8 @@ function InlineProductSearch({ products, list, state, onAdd, topBar = null }) {
   const variantResults = normalizedQuery
     ? activeProducts.flatMap((product) => normalizeProductVariants(product.variants).filter((variant) => normalizeText(`${product.name} ${variant.variety} ${variant.brand} ${variant.packageSize} ${variant.packageUnit}`).includes(normalizedQuery)).map((variant) => ({ ...product, selectedVariant: variant }))).sort((a, b) => `${a.name} ${a.selectedVariant.variety} ${a.selectedVariant.brand}`.localeCompare(`${b.name} ${b.selectedVariant.variety} ${b.selectedVariant.brand}`, 'pt-BR')).slice(0, 16)
     : []
-  const suggestionGroups = normalizedQuery ? [] : groupedProductSuggestions(state, list)
   const hasExactProduct = activeProducts.some((product) => normalizeText(product.name) === normalizedQuery)
+  const showPopover = open && Boolean(query.trim())
   useEffect(() => {
     const closeOnOutsideClick = (event) => { if (!containerRef.current?.contains(event.target)) setOpen(false) }
     document.addEventListener('pointerdown', closeOnOutsideClick)
@@ -546,33 +624,84 @@ function InlineProductSearch({ products, list, state, onAdd, topBar = null }) {
     if (included.has(selectionKey)) return
     onAdd(product)
     setQuery('')
-    setOpen(true)
+    setOpen(false)
     inputRef.current?.focus({ preventScroll: true })
     requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }))
   }
-  const addGroup = (productsToAdd) => {
-    productsToAdd.forEach(add)
-    setQuery('')
-  }
   return <div className="inline-autocomplete" ref={containerRef}>
-    <div className={`autocomplete-search ${open ? 'open' : ''}`}><Search size={20}/><input ref={inputRef} role="combobox" aria-controls="product-options" aria-expanded={open} placeholder="Adicionar produto..." value={query} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); setOpen(true) }} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); if (event.key === 'Enter' && (variantResults[0] || results[0])) { event.preventDefault(); add(variantResults[0] || results[0]) } }}/><span className="search-hint">Digite para buscar</span></div>
+    <div className={`autocomplete-search ${showPopover ? 'open' : ''}`}><Search size={20}/><input ref={inputRef} role="combobox" aria-controls="product-options" aria-expanded={showPopover} placeholder="Adicionar produto..." value={query} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); setOpen(true) }} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); if (event.key === 'Enter' && (variantResults[0] || results[0])) { event.preventDefault(); add(variantResults[0] || results[0]) } }}/><span className="search-hint">Digite para buscar</span></div>
     {topBar}
-    {open && <div className="autocomplete-popover" onPointerDown={(event) => { if (event.target.closest('button')) event.preventDefault() }}><div className="popover-heading"><b>{normalizedQuery ? 'Resultados' : 'Sugeridos'}</b></div><div className="autocomplete-results" id="product-options" role="listbox">
-        {normalizedQuery ? <>
-          {variantResults.length > 0 && <div className="variant-results-heading first-variant-heading full-width-heading"><b>Variedades cadastradas</b></div>}
-          <div className="results-grid">
-            {variantResults.map((product) => <SuggestionButton key={`${product.id}-${product.selectedVariant.id}`} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add} variant/>)}
-          </div>
-          {variantResults.length > 0 && results.length > 0 && <div className="variant-results-heading full-width-heading"><b>Outros produtos</b></div>}
-          <div className="results-grid">
-            {results.map((product) => <SuggestionButton key={product.id} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add}/>)}
-          </div>
-        </> : suggestionGroups.map((group) => <section className="suggestion-group" key={group.id}><header><b>{group.label}</b><button onPointerDown={(e) => e.preventDefault()} onClick={() => addGroup(group.products)}>Adicionar todos</button></header><div className="suggestion-carousel">{group.products.map((product) => <SuggestionCard key={product.id} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add}/>)}</div></section>)}
+    {showPopover && <div className="autocomplete-popover" onPointerDown={(event) => { if (event.target.closest('button')) event.preventDefault() }}><div className="popover-heading"><b>Resultados</b></div><div className="autocomplete-results" id="product-options" role="listbox">
+        {variantResults.length > 0 && <div className="variant-results-heading first-variant-heading full-width-heading"><b>Variedades cadastradas</b></div>}
+        <div className="results-grid">
+          {variantResults.map((product) => <SuggestionButton key={`${product.id}-${product.selectedVariant.id}`} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add} variant/>)}
+        </div>
+        {variantResults.length > 0 && results.length > 0 && <div className="variant-results-heading full-width-heading"><b>Outros produtos</b></div>}
+        <div className="results-grid">
+          {results.map((product) => <SuggestionButton key={product.id} product={product} alreadyAdded={included.has(productSelectionKey(product))} onAdd={add}/>)}
+        </div>
         {query.trim() && !hasExactProduct && <button className="custom-product category-outros" onPointerDown={(e) => e.preventDefault()} onClick={() => add({ id: uid(), name: query.trim(), category: 'Outros', defaultUnit: 'un', brands: [], variants: [] })}><CategoryIcon category="Outros" size={18}/><span className="grow"><span className="new-title"><b>Criar “{query.trim()}”</b><em>Novo</em></span></span><Plus size={18}/></button>}
-        {!results.length && !variantResults.length && !query.trim() && !suggestionGroups.length && <p className="autocomplete-empty">Registre uma compra para começarmos a prever quando os produtos vão faltar.</p>}
         {!results.length && !variantResults.length && query.trim() && <p className="autocomplete-empty">Nenhum produto cadastrado encontrado com este nome.</p>}
       </div></div>}
   </div>
+}
+
+function NextPurchaseSuggestionsSection({ suggestions, list, onAdd, onAddAll }) {
+  const [open, setOpen] = useState(() => localStorage.getItem('shopping-list-suggestions-open') === 'true')
+  useEffect(() => {
+    localStorage.setItem('shopping-list-suggestions-open', String(open))
+  }, [open])
+
+  if (!suggestions.length) return null
+
+  const included = new Set(list.items.map(listItemSelectionKey))
+
+  return (
+    <section className={`next-purchase-suggestions ${open ? 'open' : 'collapsed'}`} aria-label="Sugestões para a próxima compra">
+      <div className="next-suggestions-header">
+        <button
+          type="button"
+          className="next-suggestions-toggle"
+          aria-expanded={open}
+          onClick={() => setOpen((current) => !current)}
+        >
+          <span className="next-suggestions-icon">
+            <Sparkles size={16} />
+          </span>
+          <span className="next-suggestions-title">
+            <b>Sugestões para a próxima compra</b>
+            <small>{suggestions.length} {suggestions.length === 1 ? 'produto previsto para repor agora' : 'produtos previstos para repor agora'}</small>
+          </span>
+          <span className="next-suggestions-badge">{suggestions.length}</span>
+          <ChevronRight size={18} className={`next-suggestions-chevron ${open ? 'rotated' : ''}`} />
+        </button>
+        {open && (
+          <button
+            type="button"
+            className="next-suggestions-add-all"
+            onClick={() => onAddAll(suggestions)}
+          >
+            <Plus size={14} />
+            <span>Adicionar todos</span>
+          </button>
+        )}
+      </div>
+      {open && (
+        <div className="next-suggestions-body">
+          <div className="suggestion-carousel" role="listbox" aria-label="Produtos sugeridos para a próxima compra">
+            {suggestions.map((product) => (
+              <SuggestionCard
+                key={product.id}
+                product={product}
+                alreadyAdded={included.has(productSelectionKey(product))}
+                onAdd={onAdd}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  )
 }
 
 function SuggestionCard({ product, alreadyAdded = false, onAdd }) {
@@ -1702,20 +1831,66 @@ function VariantToProductModal({ product, variant, state, onClose, onPromote }) 
   )
 }
 
-function MergeSuggestionsModal({ state, onClose, onMergePair }) {
-  const [dismissedPairIds, setDismissedPairIds] = useState(new Set())
+function MergeSuggestionsModal({ state, mutate, toast, onClose, onMergePair }) {
   const [filterConfidence, setFilterConfidence] = useState('all')
+  const dismissedMergePairs = state.dismissedMergePairs || []
+
+  const allUndismissedSuggestions = useMemo(
+    () => findDuplicateProductSuggestions(state.products, { dismissedMergePairs: [] }),
+    [state.products]
+  )
+
+  const rawSuggestions = useMemo(
+    () => findDuplicateProductSuggestions(state.products, { dismissedMergePairs }),
+    [state.products, dismissedMergePairs]
+  )
 
   const suggestions = useMemo(() => {
-    const raw = findDuplicateProductSuggestions(state.products, { dismissedPairIds })
     if (filterConfidence === 'high') {
-      return raw.filter((s) => s.confidence === 'high')
+      return rawSuggestions.filter((s) => s.confidence === 'high')
     }
-    return raw
-  }, [state.products, dismissedPairIds, filterConfidence])
+    return rawSuggestions
+  }, [rawSuggestions, filterConfidence])
 
-  const dismissSuggestion = (pairId) => {
-    setDismissedPairIds((prev) => new Set([...prev, pairId]))
+  const dismissedCount = Math.max(0, allUndismissedSuggestions.length - rawSuggestions.length)
+
+  const dismissSuggestion = (suggestion) => {
+    const [left, right] = suggestion.products
+    const pairId = buildDismissedPairKey(left.id, right.id)
+    const now = nowIso()
+    mutate((current) => {
+      const existing = current.dismissedMergePairs || []
+      const hasEntry = existing.some((entry) => entry?.id === pairId)
+      const newEntry = {
+        id: pairId,
+        leftId: left.id,
+        rightId: right.id,
+        leftName: left.name,
+        rightName: right.name,
+        dismissed: true,
+        updatedAt: now,
+      }
+      return {
+        ...current,
+        dismissedMergePairs: hasEntry
+          ? existing.map((entry) => (entry?.id === pairId ? newEntry : entry))
+          : [newEntry, ...existing],
+      }
+    })
+    toast?.('Sugestão descartada e não será sugerida novamente.')
+  }
+
+  const restoreDismissed = () => {
+    const now = nowIso()
+    mutate((current) => ({
+      ...current,
+      dismissedMergePairs: (current.dismissedMergePairs || []).map((entry) =>
+        typeof entry === 'string'
+          ? { id: entry, dismissed: false, updatedAt: now }
+          : { ...entry, dismissed: false, updatedAt: now }
+      ),
+    }))
+    toast?.('Sugestões dispensadas restauradas.')
   }
 
   return (
@@ -1757,17 +1932,17 @@ function MergeSuggestionsModal({ state, onClose, onMergePair }) {
             </div>
             <h3>Nenhuma repetição encontrada</h3>
             <p>
-              {dismissedPairIds.size > 0
-                ? 'Todas as sugestões foram revisadas ou mescladas.'
+              {dismissedCount > 0
+                ? 'Todas as sugestões foram revisadas ou descartadas.'
                 : 'Seu catálogo de produtos está organizado e sem duplicidades identificadas.'}
             </p>
-            {dismissedPairIds.size > 0 && (
+            {dismissedCount > 0 && (
               <button
                 type="button"
                 className="secondary btn-sm"
-                onClick={() => setDismissedPairIds(new Set())}
+                onClick={restoreDismissed}
               >
-                <RotateCcw size={14} /> Restaurar sugestões dispensadas ({dismissedPairIds.size})
+                <RotateCcw size={14} /> Restaurar sugestões dispensadas ({dismissedCount})
               </button>
             )}
           </div>
@@ -1825,15 +2000,15 @@ function MergeSuggestionsModal({ state, onClose, onMergePair }) {
                     <button
                       type="button"
                       className="secondary suggestion-dismiss-btn"
-                      onClick={() => dismissSuggestion(suggestion.id)}
-                      title="Dispensar sugestão"
+                      onClick={() => dismissSuggestion(suggestion)}
+                      title="Dispensar sugestão permanentemente"
                     >
                       <X size={15} /> Não mesclar
                     </button>
                     <button
                       type="button"
                       className="primary suggestion-merge-btn"
-                      onClick={() => onMergePair(left, right)}
+                      onClick={() => onMergePair(left, right, suggestion.type)}
                     >
                       <GitMerge size={15} /> Mesclar produtos
                     </button>
@@ -1845,6 +2020,12 @@ function MergeSuggestionsModal({ state, onClose, onMergePair }) {
         )}
 
         <div className="modal-actions">
+          {dismissedCount > 0 && suggestions.length > 0 && (
+            <button type="button" className="ghost btn-sm" onClick={restoreDismissed}>
+              <RotateCcw size={14} /> Restaurar dispensadas ({dismissedCount})
+            </button>
+          )}
+          <span className="grow" />
           <button type="button" className="secondary" onClick={onClose}>
             Fechar
           </button>
@@ -1854,10 +2035,228 @@ function MergeSuggestionsModal({ state, onClose, onMergePair }) {
   )
 }
 
-function ProductMergeModal({ initialLeft, initialRight, onClose, onMerge }) {
+function PeriodicitySuggestionsModal({ state, mutate, toast, onClose }) {
+  const allSuggestions = useMemo(
+    () => findPeriodicitySuggestions(state, { includeDismissed: true }),
+    [state]
+  )
+  const suggestions = useMemo(
+    () => findPeriodicitySuggestions(state),
+    [state]
+  )
+  const dismissedCount = Math.max(0, allSuggestions.length - suggestions.length)
+
+  const acceptSuggestion = (suggestion) => {
+    const now = nowIso()
+    mutate((current) => ({
+      ...current,
+      products: current.products.map((p) =>
+        p.id === suggestion.productId
+          ? {
+              ...p,
+              recurrenceDays: Number(suggestion.suggestedDays),
+              dismissedRecurrenceSuggestion: null,
+              updatedAt: now,
+            }
+          : p
+      ),
+    }))
+    toast?.(`Periodicidade de ${suggestion.product.name} alterada para ${suggestion.suggestedLabel}.`)
+  }
+
+  const acceptAll = () => {
+    if (!suggestions.length) return
+    const now = nowIso()
+    const mapById = new Map(suggestions.map((s) => [s.productId, s.suggestedDays]))
+    mutate((current) => ({
+      ...current,
+      products: current.products.map((p) =>
+        mapById.has(p.id)
+          ? {
+              ...p,
+              recurrenceDays: Number(mapById.get(p.id)),
+              dismissedRecurrenceSuggestion: null,
+              updatedAt: now,
+            }
+          : p
+      ),
+    }))
+    toast?.(`${suggestions.length} ${suggestions.length === 1 ? 'periodicidade atualizada' : 'periodicidades atualizadas'} com sucesso.`)
+  }
+
+  const dismissSuggestion = (suggestion) => {
+    const now = nowIso()
+    mutate((current) => ({
+      ...current,
+      products: current.products.map((p) =>
+        p.id === suggestion.productId
+          ? {
+              ...p,
+              dismissedRecurrenceSuggestion: Number(suggestion.suggestedDays),
+              updatedAt: now,
+            }
+          : p
+      ),
+    }))
+    toast?.('Sugestão dispensada e não será sugerida novamente.')
+  }
+
+  const restoreDismissed = () => {
+    const now = nowIso()
+    mutate((current) => ({
+      ...current,
+      products: current.products.map((p) =>
+        p.dismissedRecurrenceSuggestion != null
+          ? { ...p, dismissedRecurrenceSuggestion: null, updatedAt: now }
+          : p
+      ),
+    }))
+    toast?.('Sugestões de periodicidade restauradas.')
+  }
+
+  return (
+    <Modal
+      title="Sugestões de periodicidade"
+      subtitle="Baseado na frequência real das suas compras nos mercados."
+      onClose={onClose}
+    >
+      <div className="merge-suggestions-container">
+        {suggestions.length > 0 && (
+          <div className="suggestions-meta-bar">
+            <span className="suggestions-count-badge">
+              <CalendarClock size={14} />
+              <b>{suggestions.length}</b> {suggestions.length === 1 ? 'sugestão identificada' : 'sugestões identificadas'}
+            </span>
+            <button
+              type="button"
+              className="primary btn-sm"
+              onClick={acceptAll}
+            >
+              <CheckCircle2 size={14} /> Aplicar todas ({suggestions.length})
+            </button>
+          </div>
+        )}
+
+        {suggestions.length === 0 ? (
+          <div className="suggestions-empty-state">
+            <div className="suggestions-empty-icon">
+              <CheckCircle2 size={38} />
+            </div>
+            <h3>Nenhuma alteração sugerida</h3>
+            <p>
+              {dismissedCount > 0
+                ? 'Todas as sugestões de periodicidade foram revisadas ou dispensadas.'
+                : 'A periodicidade dos seus produtos já está alinhada com o seu histórico de compras nos mercados.'}
+            </p>
+            {dismissedCount > 0 && (
+              <button
+                type="button"
+                className="secondary btn-sm"
+                onClick={restoreDismissed}
+              >
+                <RotateCcw size={14} /> Restaurar sugestões dispensadas ({dismissedCount})
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="suggestions-list">
+            {suggestions.map((suggestion) => {
+              const { product } = suggestion
+              return (
+                <div className="merge-suggestion-card" key={suggestion.id}>
+                  <div className="suggestion-header">
+                    <span className={`product-pill category-${categoryKey(product.category)}`}>
+                      <CategoryIcon category={product.category} size={13} /> {product.category || 'Outros'}
+                    </span>
+                    <span className="suggestion-reason">
+                      {suggestion.reason}
+                      {suggestion.latestPurchasedAt ? ` · Última em ${shortDate(suggestion.latestPurchasedAt)}` : ''}
+                    </span>
+                  </div>
+
+                  <div className="periodicity-suggestion-body">
+                    <b className="suggestion-product-name">{product.name}</b>
+                    <div className="suggestion-comparison periodicity-comparison">
+                      <div className="suggestion-product-box absorb-box">
+                        <div className="suggestion-product-badge">Atual</div>
+                        <b className="suggestion-product-name">{suggestion.currentLabel}</b>
+                      </div>
+
+                      <div className="suggestion-divider">
+                        <ChevronRight size={16} />
+                      </div>
+
+                      <div className="suggestion-product-box main-box">
+                        <div className="suggestion-product-badge">Sugerida pelo histórico</div>
+                        <b className="suggestion-product-name">{suggestion.suggestedLabel}</b>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="suggestion-actions">
+                    <button
+                      type="button"
+                      className="secondary suggestion-dismiss-btn"
+                      onClick={() => dismissSuggestion(suggestion)}
+                      title="Dispensar sugestão"
+                    >
+                      <X size={15} /> Manter atual
+                    </button>
+                    <button
+                      type="button"
+                      className="primary suggestion-merge-btn"
+                      onClick={() => acceptSuggestion(suggestion)}
+                    >
+                      <Check size={15} /> Mudar para {suggestion.suggestedLabel}
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        <div className="modal-actions">
+          {dismissedCount > 0 && suggestions.length > 0 && (
+            <button type="button" className="ghost btn-sm" onClick={restoreDismissed}>
+              <RotateCcw size={14} /> Restaurar dispensadas ({dismissedCount})
+            </button>
+          )}
+          <span className="grow" />
+          <button type="button" className="secondary" onClick={onClose}>
+            Fechar
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function defaultProductMergeMode(left, right, suggestionType) {
+  const nLeft = normalizeText(left?.name)
+  const nRight = normalizeText(right?.name)
+  if (!nLeft || !nRight || nLeft === nRight) return 'merge'
+  if (suggestionType === 'identical' || suggestionType === 'fuzzy' || suggestionType === 'barcode' || suggestionType === 'alias') {
+    return 'merge'
+  }
+  if (nRight.startsWith(`${nLeft} `)) {
+    const inferred = normalizeText(inferredVariantValue(left.name, right.name))
+    if (!inferred) return 'merge'
+    const rightVariants = normalizeProductVariants(right?.variants)
+    const alreadyHasInferredInVariants =
+      rightVariants.length > 0 &&
+      rightVariants.some(
+        (v) => normalizeText(v.brand) === inferred || normalizeText(v.variety) === inferred
+      )
+    return alreadyHasInferredInVariants ? 'merge' : 'variant'
+  }
+  return 'merge'
+}
+
+function ProductMergeModal({ initialLeft, initialRight, suggestionType, onClose, onMerge }) {
   const [left, setLeft] = useState(initialLeft)
   const [right, setRight] = useState(initialRight)
-  const [mode, setMode] = useState('merge')
+  const [mode, setMode] = useState(() => defaultProductMergeMode(initialLeft, initialRight, suggestionType))
   const [variantValue, setVariantValue] = useState(() => inferredVariantValue(initialLeft.name, initialRight.name))
   const [result, setResult] = useState({ name: initialLeft.name, category: initialLeft.category || 'Outros', defaultUnit: initialLeft.defaultUnit || 'un', recurrenceDays: initialLeft.recurrenceDays ?? null })
   const [showVariants, setShowVariants] = useState(false)
@@ -1865,10 +2264,13 @@ function ProductMergeModal({ initialLeft, initialRight, onClose, onMerge }) {
   const preview = combineProductVariants(left, right, mode, variantValue, true)
   const applyProductData = (product) => setResult((current) => ({ ...current, name: product.name, category: product.category || 'Outros', defaultUnit: product.defaultUnit || 'un', recurrenceDays: product.recurrenceDays ?? null }))
   const swap = () => {
-    setLeft(right)
-    setRight(left)
-    applyProductData(right)
-    setVariantValue(inferredVariantValue(right.name, left.name))
+    const nextLeft = right
+    const nextRight = left
+    setLeft(nextLeft)
+    setRight(nextRight)
+    applyProductData(nextLeft)
+    setVariantValue(inferredVariantValue(nextLeft.name, nextRight.name))
+    setMode(defaultProductMergeMode(nextLeft, nextRight, suggestionType))
   }
 
   const leftVarCount = normalizeProductVariants(left.variants).length
@@ -2916,7 +3318,7 @@ function updateItem(items, setter, id, patch) {
     return { ...item, ...patch, importMissingFields: (item.importMissingFields || []).filter((field) => !changedFields.includes(field)) }
   }))
 }
-const CATEGORY_EMOJIS = { Hortifruti: '🥬', Mercearia: '🥫', Frios: '🧀', Carnes: '🥩', Bebidas: '🥤', Limpeza: '🧹', Higiene: '🧴', Outros: '📦' }
+const CATEGORY_EMOJIS = { Hortifruti: '🥬', Mercearia: '🥫', Frios: '🧀', Carnes: '🥩', Bebidas: '🥤', Limpeza: '🧹', Higiene: '🧴', Temperos: '🧂', Outros: '📦' }
 function shoppingListShareText(items) {
   const title = '🛒 Lista de mercado'
   if (!items.length) return `${title}\n\nLista vazia.`
@@ -2959,12 +3361,26 @@ function textSimilarity(first, second) {
   const shared = [...aTokens].filter((token) => bTokens.has(token)).length
   return shared / new Set([...aTokens, ...bTokens]).size
 }
+function resolveMergedProduct(products, product) {
+  let current = product
+  const visited = new Set()
+  while (current?.mergedIntoId && !visited.has(current.id)) {
+    visited.add(current.id)
+    current = products.find((saved) => saved.id === current.mergedIntoId) || current
+    if (!current.mergedIntoId) break
+  }
+  return current || null
+}
 function bestCatalogSuggestion(products, item) {
   const query = item.importedProductName || item.productName
-  const ranked = products.filter((product) => !product.archivedAt).map((product) => ({ product, score: textSimilarity(query, product.name) })).sort((first, second) => second.score - first.score)
+  const ranked = products.filter((product) => !product.archivedAt).map((product) => {
+    const names = [product.name, ...(product.aliases || [])].filter(Boolean)
+    const score = Math.max(0, ...names.map((name) => textSimilarity(query, name)))
+    return { product, score }
+  }).sort((first, second) => second.score - first.score)
   return ranked[0]?.score >= .48 ? ranked[0].product : null
 }
-function prepareDraftProductMatches(draft, products, mappings = []) {
+function prepareDraftProductMatches(draft, products, mappings = [], normalizations = []) {
   return { ...draft, items: draft.items.map((item) => {
     const importedProductName = item.importedProductName || item.productName
     const originalValues = item.originalValues || {
@@ -2979,17 +3395,26 @@ function prepareDraftProductMatches(draft, products, mappings = []) {
       totalPrice: Number(item.totalPrice) || 0,
     }
     const key = productMappingKey(item)
-    const savedMapping = key ? mappings.find((mapping) => mapping.sourceKey === key) : null
-    const mappedProduct = savedMapping ? products.find((product) => product.id === savedMapping.productId) : null
+    const itemKey = normalizeText(importedProductName)
+    const savedMapping = (key ? mappings.find((mapping) => mapping.sourceKey === key) : null)
+      || (itemKey ? mappings.find((mapping) => !mapping.sourceKey && normalizeText(mapping.importedProductName || mapping.sourceDescription) === itemKey) : null)
+    const rawMappedProduct = savedMapping ? products.find((product) => product.id === savedMapping.productId) : null
+    const mappedProduct = resolveMergedProduct(products, rawMappedProduct)
     const mappedVariant = mappedProduct && savedMapping?.variantId ? normalizeProductVariants(mappedProduct.variants).find((variant) => variant.id === savedMapping.variantId) : null
-    const exactProduct = products.find((product) => !product.archivedAt && normalizeText(product.name) === normalizeText(item.productName))
+    const rawExactProduct = products.find((product) => !product.archivedAt && productNames(product).has(normalizeText(item.productName)))
+      || products.find((product) => product.mergedIntoId && productNames(product).has(normalizeText(item.productName)))
+    const exactProduct = resolveMergedProduct(products, rawExactProduct)
     const selectedProduct = mappedProduct || exactProduct
+    const matchingNorm = selectedProduct
+      ? normalizations.find((norm) => norm.mode === 'variant' && norm.variantValue && (normalizeText(norm.rightName) === normalizeText(item.productName) || normalizeText(norm.rightName) === itemKey))
+      : null
     const suggestedProduct = selectedProduct || bestCatalogSuggestion(products, { ...item, importedProductName })
     return selectedProduct ? {
       ...item,
       importedProductName,
       originalValues,
       productName: selectedProduct.name,
+      ...(matchingNorm && !item.variety ? { variety: matchingNorm.variantValue } : {}),
       ...(mappedVariant ? {
         variantId: mappedVariant.id,
         variety: mappedVariant.variety || '',
@@ -3085,66 +3510,19 @@ function updateCatalogProduct(state, previous, next) {
     productMappings: (state.productMappings || []).map((mapping) => mapping.productId === savedProduct.id ? { ...mapping, variantId: variantIds.has(mapping.variantId) ? mapping.variantId : '', updatedAt: nowIso() } : mapping),
   }
 }
-function inferredVariantValue(mainName, absorbedName) {
-  const main = normalizeText(mainName)
-  const words = String(absorbedName || '').split(/\s+/).filter((word) => !main.split(/\s+/).includes(normalizeText(word)))
-  return words.join(' ') || absorbedName || ''
-}
-function combineProductVariants(left, right, mode, variantValue, preview = false) {
-  const variants = normalizeProductVariants(left.variants).map((variant) => ({ ...variant }))
-  const variantIdMap = {}
-  const transformedById = {}
-  let rightVariants = normalizeProductVariants(right.variants)
-  if (mode === 'variant' && !rightVariants.length) rightVariants = [{ id: preview ? `preview-${right.id}` : uid(), variety: variantValue, brand: '', packageSize: 1, packageUnit: 'un', barcode: '', createdAt: nowIso() }]
-  rightVariants.forEach((source) => {
-    const transformed = mode === 'variant' ? { ...source, variety: variantValue || source.variety || '' } : { ...source }
-    transformedById[source.id] = transformed
-    const existing = variants.find((variant) => variantMatchesItem(variant, transformed))
-    if (existing) variantIdMap[source.id] = existing.id
-    else { variants.push(transformed); variantIdMap[source.id] = transformed.id }
-  })
-  return { variants, variantIdMap, transformedById }
-}
-function mergeCatalogProducts(state, plan) {
-  const left = state.products.find((product) => product.id === plan.leftId)
-  const right = state.products.find((product) => product.id === plan.rightId)
-  if (!left || !right || left.id === right.id) return state
-  const combined = combineProductVariants(left, right, plan.mode, plan.variantValue)
-  const resultProduct = { ...left, ...plan.result, id: left.id, aliases: [...new Set([...(left.aliases || []), ...(right.aliases || []), left.name, right.name].filter((name) => normalizeText(name) !== normalizeText(plan.result.name)))], archivedAt: null, mergedIntoId: null, variants: combined.variants, brands: [...new Set(combined.variants.map((variant) => variant.brand).filter(Boolean))], updatedAt: nowIso() }
-  const belongsTo = (item, product) => itemBelongsToProduct(state, item, product)
-  const redirectPurchaseItem = (item) => {
-    const fromRight = belongsTo(item, right)
-    const fromLeft = belongsTo(item, left)
-    if (!fromRight && !fromLeft) return item
-    let redirected = { ...item, productId: left.id, productName: resultProduct.name, category: resultProduct.category }
-    if (fromRight && plan.mode === 'variant') redirected = { ...redirected, variety: plan.variantValue || redirected.variety || '' }
-    if (fromRight && item.variantId && combined.variantIdMap[item.variantId]) redirected.variantId = combined.variantIdMap[item.variantId]
-    const matching = combined.variants.find((variant) => variantMatchesItem(variant, redirected))
-    if (matching) redirected.variantId = matching.id
-    return redirected
-  }
-  const redirectListItems = (items) => items.map((item) => belongsTo(item, left) || belongsTo(item, right) ? { ...item, productId: left.id, name: resultProduct.name, category: resultProduct.category, unit: resultProduct.defaultUnit || item.unit } : item).reduce((merged, item) => {
-    const duplicate = item.productId === left.id ? merged.find((saved) => saved.productId === left.id) : null
-    if (!duplicate) return [...merged, item]
-    return merged.map((saved) => saved.id === duplicate.id ? { ...saved, quantity: Number(saved.quantity || 0) + Number(item.quantity || 0), note: [...new Set([saved.note, item.note].filter(Boolean))].join(' · ') } : saved)
-  }, [])
-  return {
-    ...state,
-    products: state.products.map((product) => product.id === left.id ? resultProduct : product.id === right.id ? { ...product, archivedAt: nowIso(), mergedIntoId: left.id } : product),
-    purchases: state.purchases.map((purchase) => ({ ...purchase, items: purchase.items.map(redirectPurchaseItem) })),
-    lists: state.lists.map((list) => ({ ...list, items: redirectListItems(list.items) })),
-    productMappings: (state.productMappings || []).map((mapping) => mapping.productId === right.id ? { ...mapping, productId: left.id, variantId: combined.variantIdMap[mapping.variantId] || mapping.variantId || '', updatedAt: nowIso() } : mapping),
-    productNormalizations: [{ id: uid(), leftProductId: left.id, rightProductId: right.id, leftName: left.name, rightName: right.name, resultName: resultProduct.name, mode: plan.mode, variantValue: plan.variantValue || '', createdAt: nowIso() }, ...(state.productNormalizations || [])],
-  }
-}
 function mergeProducts(products, items, purchaseMeta) {
   let result = products.map((product) => ({ ...product, variants: normalizeProductVariants(product.variants) }))
   const linkedItems = items.map((item) => {
     const productKey = normalizeText(item.productName)
     let product = item.catalogDecision === 'existing' && item.productId ? result.find((saved) => saved.id === item.productId) : null
-    if (!product && item.catalogDecision !== 'new') product = result.find((saved) => normalizeText(saved.name) === productKey)
+    if (!product && item.catalogDecision !== 'new') {
+      product = result.find((saved) => !saved.archivedAt && productNames(saved).has(productKey))
+        || result.find((saved) => saved.mergedIntoId && productNames(saved).has(productKey))
+        || result.find((saved) => !saved.mergedIntoId && productNames(saved).has(productKey))
+    }
+    product = resolveMergedProduct(result, product)
     if (!product) {
-      product = { id: uid(), name: item.productName, category: item.category || 'Outros', defaultUnit: defaultUnitForProduct(item.productName, item.category), brands: [], variants: [], archivedAt: null, createdAt: nowIso() }
+      product = { id: uid(), name: item.productName, category: item.category || 'Outros', defaultUnit: defaultUnitForProduct(item.productName, item.category), brands: [], variants: [], archivedAt: null, createdAt: nowIso(), updatedAt: nowIso() }
       result.push(product)
     }
     const variants = normalizeProductVariants(product.variants)
@@ -3152,7 +3530,7 @@ function mergeProducts(products, items, purchaseMeta) {
     if (!variant) variant = { id: uid(), variety: item.variety || '', brand: item.brand || '', packageSize: Number(item.packageSize) || 1, packageUnit: item.packageUnit || 'un', barcode: item.barcode || '', createdAt: nowIso() }
     const updatedVariant = { ...variant, variety: item.variety || variant.variety || '', brand: item.brand || variant.brand || '', packageSize: Number(item.packageSize) || 1, packageUnit: item.packageUnit || 'un', barcode: item.barcode || variant.barcode || '', lastPrice: Number(item.unitPrice) || Number(item.totalPrice) / (Number(item.quantity) || 1), lastPurchasedAt: purchaseMeta.purchasedAt, lastMarketName: purchaseMeta.marketName, updatedAt: nowIso() }
     const updatedVariants = variants.some((saved) => saved.id === updatedVariant.id) ? variants.map((saved) => saved.id === updatedVariant.id ? updatedVariant : saved) : [...variants, updatedVariant]
-    product = { ...product, archivedAt: null, category: product.category === 'Outros' ? item.category : product.category, defaultUnit: product.defaultUnit || defaultUnitForProduct(item.productName, item.category), variants: updatedVariants, brands: [...new Set(updatedVariants.map((saved) => saved.brand).filter(Boolean))] }
+    product = { ...product, archivedAt: null, mergedIntoId: null, updatedAt: nowIso(), category: product.category === 'Outros' ? item.category : product.category, defaultUnit: product.defaultUnit || defaultUnitForProduct(item.productName, item.category), variants: updatedVariants, brands: [...new Set(updatedVariants.map((saved) => saved.brand).filter(Boolean))] }
     result = result.map((saved) => saved.id === product.id ? product : saved)
     const { originalValues: _reviewOnlyValues, ...savedItem } = item
     return { ...savedItem, productName: product.name, category: product.category || item.category, productId: product.id, variantId: updatedVariant.id }
@@ -3196,52 +3574,13 @@ function updatePurchaseDetails(state, purchaseToUpdate, market, purchasedAt) {
 function removePurchase(state, purchaseId) {
   return refreshPurchaseMetadata({ ...state, purchases: state.purchases.filter((purchase) => purchase.id !== purchaseId) })
 }
-function purchasesForProduct(state, name) { return state.purchases.filter((purchase) => purchase.items.some((item) => normalizeText(item.productName) === normalizeText(name))).sort((a, b) => new Date(b.purchasedAt) - new Date(a.purchasedAt)) }
-function categoryDefaultDays(category) { return ({ Hortifruti: 7, Frios: 7, Carnes: 14, Mercearia: 30, Bebidas: 30, Limpeza: 60, Higiene: 60, Outros: 30 })[category] || 30 }
-function nearestPeriod(days) { return [7, 14, 30, 60, 90].reduce((best, value) => Math.abs(value - days) < Math.abs(best - days) ? value : best, 30) }
-function periodicityLabel(days) { return PERIODICITY_OPTIONS.find((option) => Number(option.value) === days)?.label || `A cada ${days} dias` }
 function compactPeriodicity(product, frequency) {
   if (frequency.days <= 0) return 'Manual'
-  const cadence = `${frequency.days}d`
-  return product.recurrenceDays == null ? `Auto · ${cadence}` : cadence
-}
-function periodicityInfo(state, product) {
-  if (product.recurrenceDays != null) return { days: Number(product.recurrenceDays), label: periodicityLabel(Number(product.recurrenceDays)), source: 'manual' }
-  const purchases = purchasesForProduct(state, product.name)
-  if (purchases.length >= 2) {
-    const intervals = purchases.slice(0, 5).map((purchase, index) => index < purchases.length - 1 ? Math.round((new Date(purchase.purchasedAt) - new Date(purchases[index + 1].purchasedAt)) / 86400000) : null).filter((days) => days > 0)
-    if (intervals.length) {
-      const sorted = [...intervals].sort((a, b) => a - b)
-      const days = nearestPeriod(sorted[Math.floor(sorted.length / 2)])
-      return { days, label: periodicityLabel(days), source: 'history' }
-    }
+  if (product.recurrenceDays == null) {
+    const defaultDays = categoryDefaultDays(product.category)
+    return `Auto · ${defaultDays}d`
   }
-  const days = categoryDefaultDays(product.category)
-  return { days, label: periodicityLabel(days), source: 'category' }
-}
-function groupedProductSuggestions(state, list) {
-  const inList = new Set(list.items.map((item) => normalizeText(item.name)))
-  const now = new Date()
-  const groups = [
-    { id: 'week', label: 'Para esta semana', maxDays: 7, products: [] },
-    { id: 'next-week', label: 'Para a próxima semana', maxDays: 14, products: [] },
-    { id: 'month', label: 'Para este mês', maxDays: 31, products: [] },
-    { id: 'next-month', label: 'Para o próximo mês', maxDays: 62, products: [] },
-  ]
-  state.products.forEach((product) => {
-    if (product.archivedAt) return
-    if (inList.has(normalizeText(product.name))) return
-    const history = purchasesForProduct(state, product.name)
-    if (!history.length && product.recurrenceDays == null) return
-    const frequency = periodicityInfo(state, product)
-    if (frequency.days <= 0) return
-    const dueAt = history.length ? new Date(new Date(history[0].purchasedAt).getTime() + frequency.days * 86400000) : now
-    const daysUntil = Math.ceil((dueAt - now) / 86400000)
-    const group = groups.find((candidate) => daysUntil <= candidate.maxDays)
-    if (!group) return
-    group.products.push(product)
-  })
-  return groups.map((group) => ({ ...group, products: group.products.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')).slice(0, 10) })).filter((group) => group.products.length)
+  return `${frequency.days}d`
 }
 function productSelectionKey(product) { const productKey = product.id || normalizeText(product.name); return product.selectedVariant ? `product:${productKey}|variant:${product.selectedVariant.id}` : `product:${productKey}|base` }
 function listItemSelectionKey(item) { const productKey = item.productId || normalizeText(item.name); return item.variantId ? `product:${productKey}|variant:${item.variantId}` : `product:${productKey}|base` }

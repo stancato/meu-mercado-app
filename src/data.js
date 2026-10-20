@@ -1,4 +1,4 @@
-export const CATEGORIES = ['Hortifruti', 'Mercearia', 'Frios', 'Carnes', 'Bebidas', 'Limpeza', 'Higiene', 'Outros']
+export const CATEGORIES = ['Hortifruti', 'Mercearia', 'Frios', 'Carnes', 'Bebidas', 'Limpeza', 'Higiene', 'Temperos', 'Outros']
 export const UNITS = ['un', 'kg', 'g', 'L', 'ml', 'pacote', 'caixa', 'dúzia']
 
 const STARTER_PRODUCT_NAMES = [
@@ -45,6 +45,7 @@ export const initialState = {
   products: STARTER_PRODUCTS,
   productMappings: [],
   productNormalizations: [],
+  dismissedMergePairs: [],
   deletedListItems: [],
   markets: [],
   settings: { theme: 'system' },
@@ -400,7 +401,7 @@ Use exatamente este formato:
       "produto": "nome genérico e legível do produto, sem marca nem tamanho",
       "variedade": "sabor, tipo ou versão do produto, como Tradicional, Queijo, Micro-ondas, Integral ou Sem lactose; string vazia se não houver",
       "marca": "marca inferida com segurança ou string vazia",
-      "categoria": "Hortifruti, Mercearia, Frios, Carnes, Bebidas, Limpeza, Higiene ou Outros",
+      "categoria": "Hortifruti, Mercearia, Frios, Carnes, Bebidas, Limpeza, Higiene, Temperos ou Outros",
       "quantidadeComprada": 1,
       "conteudoEmbalagem": 1,
       "unidadeConteudo": "un, kg, g, L ou ml",
@@ -441,6 +442,7 @@ export function buildReceiptPrompt(products = [], options = {}) {
 
   if (includeCatalog && Array.isArray(products) && products.length > 0) {
     const catalog = products
+      .filter((p) => p && !p.archivedAt)
       .map((p) => {
         const variants = normalizeProductVariants(p.variants || [])
         const varieties = [...new Set(variants.map((v) => (v.variety || '').trim()).filter(Boolean))]
@@ -642,10 +644,11 @@ export async function fetchNfceFromUrl(url) {
 
 export function buildReceiptPromptFromNfce(nfcePayload, products = [], options = {}) {
   const { includeCatalog = true } = options
-  let prompt = `Analise os dados extraídos desta nota fiscal brasileira e formate-os em JSON padronizado conforme o catálogo.\n\nDados da Nota Fiscal:\n\`\`\`json\n${JSON.stringify(nfcePayload, null, 2)}\n\`\`\`\n\nResponda SOMENTE com JSON válido, sem markdown e sem explicações, seguindo a estrutura:\n{\n  "mercado": {\n    "nome": "${nfcePayload?.mercado?.nome || ''}",\n    "razaoSocial": "${nfcePayload?.mercado?.razaoSocial || ''}",\n    "cnpj": "${nfcePayload?.mercado?.cnpj || ''}",\n    "endereco": "${nfcePayload?.mercado?.endereco || ''}"\n  },\n  "compra": {\n    "data": "${nfcePayload?.compra?.data || ''}",\n    "numeroDocumento": "${nfcePayload?.compra?.numeroDocumento || ''}",\n    "valorTotal": ${Number(nfcePayload?.compra?.valorTotal || 0)}\n  },\n  "itens": [\n    {\n      "descricaoOriginal": "descrição original",\n      "produto": "nome genérico e limpo do produto",\n      "variedade": "sabor/tipo se aplicável ou vazio",\n      "marca": "marca se identificável ou vazio",\n      "categoria": "Hortifruti, Mercearia, Frios, Carnes, Bebidas, Limpeza, Higiene ou Outros",\n      "quantidadeComprada": 1,\n      "conteudoEmbalagem": 1,\n      "unidadeConteudo": "un, kg, g, L ou ml",\n      "precoUnitario": 0.00,\n      "precoTotal": 0.00,\n      "codigoBarras": "código se houver"\n    }\n  ]\n}`
+  let prompt = `Analise os dados extraídos desta nota fiscal brasileira e formate-os em JSON padronizado conforme o catálogo.\n\nDados da Nota Fiscal:\n\`\`\`json\n${JSON.stringify(nfcePayload, null, 2)}\n\`\`\`\n\nResponda SOMENTE com JSON válido, sem markdown e sem explicações, seguindo a estrutura:\n{\n  "mercado": {\n    "nome": "${nfcePayload?.mercado?.nome || ''}",\n    "razaoSocial": "${nfcePayload?.mercado?.razaoSocial || ''}",\n    "cnpj": "${nfcePayload?.mercado?.cnpj || ''}",\n    "endereco": "${nfcePayload?.mercado?.endereco || ''}"\n  },\n  "compra": {\n    "data": "${nfcePayload?.compra?.data || ''}",\n    "numeroDocumento": "${nfcePayload?.compra?.numeroDocumento || ''}",\n    "valorTotal": ${Number(nfcePayload?.compra?.valorTotal || 0)}\n  },\n  "itens": [\n    {\n      "descricaoOriginal": "descrição original",\n      "produto": "nome genérico e limpo do produto",\n      "variedade": "sabor/tipo se aplicável ou vazio",\n      "marca": "marca se identificável ou vazio",\n      "categoria": "Hortifruti, Mercearia, Frios, Carnes, Bebidas, Limpeza, Higiene, Temperos ou Outros",\n      "quantidadeComprada": 1,\n      "conteudoEmbalagem": 1,\n      "unidadeConteudo": "un, kg, g, L ou ml",\n      "precoUnitario": 0.00,\n      "precoTotal": 0.00,\n      "codigoBarras": "código se houver"\n    }\n  ]\n}`
 
   if (includeCatalog && Array.isArray(products) && products.length > 0) {
     const catalog = products
+      .filter((p) => p && !p.archivedAt)
       .map((p) => {
         const variants = normalizeProductVariants(p.variants || [])
         const varieties = [...new Set(variants.map((v) => (v.variety || '').trim()).filter(Boolean))]
@@ -1127,11 +1130,17 @@ export function updatePurchaseItem(state, payload) {
   let updatedMappings = state.productMappings || []
   if (originalKey) {
     const normOriginal = normalizeText(originalKey)
+    const barcodeDigits = onlyDigits(barcode || oldItem.barcode)
+    const sourceKey = barcodeDigits ? `barcode:${barcodeDigits}` : `description:${normOriginal}`
     const existingIndex = updatedMappings.findIndex(
-      (m) => normalizeText(m.importedDescription || m.description || '') === normOriginal
+      (m) =>
+        m.sourceKey === sourceKey ||
+        normalizeText(m.importedDescription || m.sourceDescription || m.description || '') === normOriginal
     )
     const newMapping = {
       id: existingIndex >= 0 ? updatedMappings[existingIndex].id : uid(),
+      sourceKey,
+      sourceDescription: originalKey,
       importedDescription: originalKey,
       productId: finalProductId,
       variantId: finalVariantId || '',
@@ -1191,8 +1200,58 @@ export function tokenizeProductName(name = '') {
     .filter((token) => token.length > 0 && !STOP_WORDS.has(token))
 }
 
+const DISTINCT_COMPOUND_PREFIXES = {
+  leite: ['leite condensado', 'leite de coco', 'leite em po', 'leite fermentado', 'leite vegetal', 'leite de amendoa', 'leite de aveia', 'leite de soja', 'leite de arroz', 'leite ninho'],
+  agua: ['agua sanitaria', 'agua de coco', 'agua oxigenada', 'agua tonica', 'agua micelar'],
+  pao: ['pao de queijo', 'pao de alho', 'pao de mel'],
+  batata: ['batata palha', 'batata doce', 'batata frita', 'batata congelada'],
+  creme: ['creme de leite', 'creme dental', 'creme de avela', 'creme de ricota', 'creme de queijo', 'creme vegetal', 'creme capilar', 'creme de pentear'],
+  papel: ['papel higienico', 'papel toalha', 'papel-toalha', 'papel aluminio', 'papel filme', 'papel manteiga', 'papel sulfite'],
+  sabao: ['sabao em po', 'sabao em barra', 'sabao em pedra', 'sabao liquido', 'sabao em pasta'],
+  milho: ['milho de pipoca'],
+  oleo: ['oleo de coco', 'oleo essencial', 'oleo corporal'],
+  farinha: ['farinha de trigo', 'farinha de rosca', 'farinha de mandioca', 'farinha de milho', 'farinha de aveia', 'farinha lactea', 'farinha panko'],
+  molho: ['molho de tomate', 'molho ingles', 'molho shoyu', 'molho branco', 'molho pesto', 'molho barbecue', 'molho de pimenta', 'molho tare'],
+}
+
+function isDistinctCompoundProduct(shorterNorm, longerNorm) {
+  const head = shorterNorm.split(/\s+/)[0]
+  const exclusions = DISTINCT_COMPOUND_PREFIXES[shorterNorm] || DISTINCT_COMPOUND_PREFIXES[head] || []
+  return exclusions.some((compound) => longerNorm === compound || longerNorm.startsWith(compound + ' '))
+}
+
+export function buildDismissedPairKey(id1, id2) {
+  return [String(id1 || ''), String(id2 || '')].sort().join('::')
+}
+
+export function buildDismissedNamePairKey(name1, name2) {
+  return [normalizeText(name1), normalizeText(name2)].sort().join('::')
+}
+
 export function findDuplicateProductSuggestions(products = [], options = {}) {
-  const { dismissedPairIds = new Set() } = options
+  const { dismissedPairIds = new Set(), dismissedMergePairs = [] } = options
+  const dismissedIds = new Set(
+    dismissedPairIds instanceof Set ? [...dismissedPairIds] : Array.isArray(dismissedPairIds) ? dismissedPairIds : []
+  )
+  const dismissedNames = new Set()
+
+  if (Array.isArray(dismissedMergePairs)) {
+    dismissedMergePairs.forEach((entry) => {
+      if (!entry || entry.dismissed === false) return
+      if (typeof entry === 'string') {
+        dismissedIds.add(entry)
+        return
+      }
+      if (entry.id) dismissedIds.add(String(entry.id))
+      if (entry.leftId && entry.rightId) {
+        dismissedIds.add(buildDismissedPairKey(entry.leftId, entry.rightId))
+      }
+      if (entry.leftName && entry.rightName) {
+        dismissedNames.add(buildDismissedNamePairKey(entry.leftName, entry.rightName))
+      }
+    })
+  }
+
   const activeProducts = products.filter((p) => p && !p.archivedAt)
   const suggestions = []
 
@@ -1201,14 +1260,18 @@ export function findDuplicateProductSuggestions(products = [], options = {}) {
       const p1 = activeProducts[i]
       const p2 = activeProducts[j]
 
-      const pairId = [p1.id, p2.id].sort().join('::')
-      if (dismissedPairIds.has(pairId)) continue
+      const pairId = buildDismissedPairKey(p1.id, p2.id)
+      if (dismissedIds.has(pairId)) continue
 
       const n1 = normalizeText(p1.name)
       const n2 = normalizeText(p2.name)
       if (!n1 || !n2) continue
 
+      const namePairKey = buildDismissedNamePairKey(n1, n2)
+      if (dismissedNames.has(namePairKey)) continue
+
       let match = null
+      const compatibleCategory = p1.category === p2.category || p1.category === 'Outros' || p2.category === 'Outros'
 
       // 1. Barcode check
       const b1 = (p1.variants || []).map((v) => onlyDigits(v.barcode)).filter((b) => b && b.length >= 6)
@@ -1247,44 +1310,55 @@ export function findDuplicateProductSuggestions(products = [], options = {}) {
         }
       }
 
-      // 4. Minor typo / Levenshtein distance
-      if (!match) {
-        const dist = levenshteinDistance(n1, n2)
+      // 4. Minor typo / Levenshtein distance / singular-plural
+      if (!match && compatibleCategory) {
+        const minLen = Math.min(n1.length, n2.length)
         const maxLen = Math.max(n1.length, n2.length)
-        if (maxLen >= 4 && dist === 1) {
+        const isPluralPair =
+          minLen >= 3 &&
+          (n1 === `${n2}s` || n2 === `${n1}s` || n1 === `${n2}es` || n2 === `${n1}es`)
+
+        if (isPluralPair) {
           match = {
-            score: 0.92,
+            score: 0.94,
             confidence: 'high',
-            reason: 'Nomes quase idênticos (diferença de 1 letra)',
+            reason: 'Singular e plural do mesmo produto',
             type: 'fuzzy',
           }
-        } else if (maxLen >= 7 && dist === 2) {
-          match = {
-            score: 0.82,
-            confidence: 'high',
-            reason: 'Nomes muito parecidos (possível erro de digitação)',
-            type: 'fuzzy',
+        } else if (n1.slice(0, 2) === n2.slice(0, 2)) {
+          const dist = levenshteinDistance(n1, n2)
+          if (maxLen >= 5 && dist === 1) {
+            match = {
+              score: 0.92,
+              confidence: 'high',
+              reason: 'Nomes quase idênticos (diferença de 1 letra)',
+              type: 'fuzzy',
+            }
+          } else if (maxLen >= 7 && dist === 2) {
+            match = {
+              score: 0.82,
+              confidence: 'high',
+              reason: 'Nomes muito parecidos (possível erro de digitação)',
+              type: 'fuzzy',
+            }
           }
         }
       }
 
       // 5. Containment match (e.g. "Café Pilão" vs "Café" or "Leite Integral" vs "Leite")
-      if (!match) {
-        const p1ContainsP2 = n1.startsWith(n2 + ' ') || n1.endsWith(' ' + n2) || n1.includes(' ' + n2 + ' ')
-        const p2ContainsP1 = n2.startsWith(n1 + ' ') || n2.endsWith(' ' + n1) || n2.includes(' ' + n1 + ' ')
-        if (p1ContainsP2 || p2ContainsP1) {
-          const shorterName = n1.length <= n2.length ? p1.name : p2.name
-          const longerName = n1.length <= n2.length ? p2.name : p1.name
-          const shorterNorm = n1.length <= n2.length ? n1 : n2
-          const sameCategory = p1.category === p2.category || p1.category === 'Outros' || p2.category === 'Outros'
+      if (!match && compatibleCategory) {
+        const shorter = n1.length <= n2.length ? p1 : p2
+        const longer = n1.length <= n2.length ? p2 : p1
+        const shorterNorm = n1.length <= n2.length ? n1 : n2
+        const longerNorm = n1.length <= n2.length ? n2 : n1
 
-          if (shorterNorm.length >= 3 && sameCategory) {
-            match = {
-              score: 0.85,
-              confidence: 'high',
-              reason: `"${longerName}" contém "${shorterName}" (possível marca ou sabor)`,
-              type: 'containment',
-            }
+        const startsWithShorter = longerNorm.startsWith(`${shorterNorm} `)
+        if (startsWithShorter && shorterNorm.length >= 3 && !isDistinctCompoundProduct(shorterNorm, longerNorm)) {
+          match = {
+            score: 0.85,
+            confidence: 'high',
+            reason: `"${longer.name}" contém "${shorter.name}" (possível marca ou sabor)`,
+            type: 'containment',
           }
         }
       }
@@ -1293,13 +1367,19 @@ export function findDuplicateProductSuggestions(products = [], options = {}) {
       if (!match) {
         const t1 = tokenizeProductName(p1.name)
         const t2 = tokenizeProductName(p2.name)
-        if (t1.length > 0 && t2.length > 0) {
+        const shorterNorm = n1.length <= n2.length ? n1 : n2
+        const longerNorm = n1.length <= n2.length ? n2 : n1
+
+        if (t1.length > 0 && t2.length > 0 && !isDistinctCompoundProduct(shorterNorm, longerNorm)) {
           const sharedTokens = t1.filter((t) => t2.includes(t))
-          if (sharedTokens.length > 0) {
+          const exactTokenSetMatch = sharedTokens.length === t1.length && sharedTokens.length === t2.length
+          const sameHeadNoun = t1[0] === t2[0]
+
+          if (sharedTokens.length > 0 && (exactTokenSetMatch || (sameHeadNoun && sharedTokens.length >= 2))) {
             const dice = (2 * sharedTokens.length) / (t1.length + t2.length)
             const sameCategory = p1.category === p2.category
             const oneIsOutros = p1.category === 'Outros' || p2.category === 'Outros'
-            let finalScore = dice * 0.85 + (sameCategory ? 0.1 : oneIsOutros ? 0 : -0.2)
+            const finalScore = dice * 0.85 + (sameCategory ? 0.1 : oneIsOutros ? 0 : -0.2)
 
             if (finalScore >= 0.65) {
               match = {
@@ -1321,9 +1401,12 @@ export function findDuplicateProductSuggestions(products = [], options = {}) {
         let left = p1
         let right = p2
 
-        if (n2.length < n1.length && (n1.includes(n2) || v2Count >= v1Count)) {
+        if (n2.length < n1.length && (n1.startsWith(`${n2} `) || v2Count >= v1Count)) {
           left = p2
           right = p1
+        } else if (n1.length < n2.length && n2.startsWith(`${n1} `)) {
+          left = p1
+          right = p2
         } else if (v2Count > v1Count) {
           left = p2
           right = p1
@@ -1346,3 +1429,469 @@ export function findDuplicateProductSuggestions(products = [], options = {}) {
 
   return suggestions.sort((a, b) => b.score - a.score)
 }
+
+export function inferredVariantValue(mainName, absorbedName) {
+  const main = normalizeText(mainName)
+  const mainWords = new Set(main.split(/\s+/).filter(Boolean))
+  const words = String(absorbedName || '')
+    .trim()
+    .split(/\s+/)
+    .filter((word) => !mainWords.has(normalizeText(word)))
+  while (words.length > 0 && ['de', 'da', 'do', 'das', 'dos'].includes(normalizeText(words[0]))) {
+    words.shift()
+  }
+  return words.join(' ').trim() || String(absorbedName || '').trim()
+}
+
+export function combineProductVariants(left, right, mode, variantValue, preview = false) {
+  const variants = normalizeProductVariants(left?.variants).map((variant) => ({ ...variant }))
+  const variantIdMap = {}
+  const transformedById = {}
+  let rightVariants = normalizeProductVariants(right?.variants)
+  const fallbackUnit = right?.defaultUnit || left?.defaultUnit || 'un'
+  if (mode === 'variant' && !rightVariants.length) {
+    rightVariants = [
+      {
+        id: preview ? `preview-${right?.id || 'right'}` : uid(),
+        variety: variantValue,
+        brand: '',
+        packageSize: 1,
+        packageUnit: fallbackUnit,
+        barcode: '',
+        createdAt: nowIso(),
+      },
+    ]
+  }
+  rightVariants.forEach((source) => {
+    const transformed = mode === 'variant' ? { ...source, variety: variantValue || source.variety || '' } : { ...source }
+    transformedById[source.id] = transformed
+    const existing = variants.find((variant) => variantMatchesItem(variant, transformed))
+    if (existing) {
+      variantIdMap[source.id] = existing.id
+      if (!existing.barcode && transformed.barcode) existing.barcode = transformed.barcode
+    } else {
+      variants.push(transformed)
+      variantIdMap[source.id] = transformed.id
+    }
+  })
+  return { variants, variantIdMap, transformedById }
+}
+
+export function mergeCatalogProducts(state, plan) {
+  const left = state.products.find((product) => product.id === plan.leftId)
+  const right = state.products.find((product) => product.id === plan.rightId)
+  if (!left || !right || left.id === right.id) return state
+
+  const now = nowIso()
+  const hadRightVariants = normalizeProductVariants(right.variants).length > 0
+  const combined = combineProductVariants(left, right, plan.mode, plan.variantValue)
+  const syntheticRightVariantId =
+    !hadRightVariants && plan.mode === 'variant' ? combined.variants[combined.variants.length - 1]?.id : null
+  let finalVariants = [...combined.variants]
+  const usedRightPurchaseVariantIds = new Set()
+
+  const resultName = (plan.result?.name || left.name || '').trim()
+  const resultCategory = plan.result?.category || left.category || 'Outros'
+  const resultDefaultUnit = plan.result?.defaultUnit || left.defaultUnit || 'un'
+
+  const belongsTo = (item, product) => itemBelongsToProduct(state, item, product)
+
+  const redirectPurchaseItem = (item) => {
+    const fromRight = belongsTo(item, right)
+    const fromLeft = belongsTo(item, left)
+    if (!fromRight && !fromLeft) return item
+
+    let redirected = {
+      ...item,
+      productId: left.id,
+      productName: resultName,
+      category: resultCategory,
+    }
+    if (fromRight && plan.mode === 'variant') {
+      redirected = { ...redirected, variety: plan.variantValue || redirected.variety || '' }
+    }
+    if (fromRight && item.variantId && combined.variantIdMap[item.variantId]) {
+      redirected.variantId = combined.variantIdMap[item.variantId]
+    }
+    let matching =
+      finalVariants.find((variant) => variant.id && variant.id === redirected.variantId) ||
+      finalVariants.find((variant) => variantMatchesItem(variant, redirected))
+
+    if (!matching) {
+      const createdVariant = {
+        id: uid(),
+        variety: redirected.variety || '',
+        brand: redirected.brand || '',
+        packageSize: Number(redirected.packageSize) || 1,
+        packageUnit: redirected.packageUnit || resultDefaultUnit,
+        barcode: redirected.barcode || '',
+        createdAt: now,
+        updatedAt: now,
+      }
+      finalVariants.push(createdVariant)
+      matching = createdVariant
+    } else if (!matching.barcode && redirected.barcode) {
+      matching.barcode = redirected.barcode
+    }
+
+    redirected.variantId = matching.id
+    if (fromRight) usedRightPurchaseVariantIds.add(matching.id)
+    return redirected
+  }
+
+  const updatedPurchases = state.purchases.map((purchase) => ({
+    ...purchase,
+    items: purchase.items.map(redirectPurchaseItem),
+  }))
+
+  if (
+    syntheticRightVariantId &&
+    usedRightPurchaseVariantIds.size > 0 &&
+    !usedRightPurchaseVariantIds.has(syntheticRightVariantId)
+  ) {
+    finalVariants = finalVariants.filter((variant) => variant.id !== syntheticRightVariantId)
+  }
+
+  const resultProduct = {
+    ...left,
+    ...plan.result,
+    id: left.id,
+    name: resultName,
+    category: resultCategory,
+    defaultUnit: resultDefaultUnit,
+    aliases: [
+      ...new Set(
+        [...(left.aliases || []), ...(right.aliases || []), left.name, right.name].filter(
+          (name) => normalizeText(name) !== normalizeText(resultName)
+        )
+      ),
+    ],
+    archivedAt: null,
+    mergedIntoId: null,
+    variants: finalVariants,
+    brands: [...new Set(finalVariants.map((variant) => variant.brand).filter(Boolean))],
+    updatedAt: now,
+  }
+
+  const redirectListItems = (items) =>
+    items
+      .map((item) => {
+        const fromRight = belongsTo(item, right)
+        const fromLeft = belongsTo(item, left)
+        if (!fromLeft && !fromRight) return item
+        const nextItem = {
+          ...item,
+          productId: left.id,
+          name: resultProduct.name,
+          category: resultProduct.category,
+          unit: resultProduct.defaultUnit || item.unit,
+        }
+        if (fromRight && plan.mode === 'variant') {
+          nextItem.variety = plan.variantValue || nextItem.variety || ''
+        }
+        if (fromRight && item.variantId && combined.variantIdMap[item.variantId]) {
+          nextItem.variantId = combined.variantIdMap[item.variantId]
+        }
+        const matching =
+          finalVariants.find((v) => v.id && v.id === nextItem.variantId) ||
+          (nextItem.variety || nextItem.brand ? finalVariants.find((v) => variantMatchesItem(v, nextItem)) : null)
+        if (matching) {
+          nextItem.variantId = matching.id
+        }
+        return nextItem
+      })
+      .reduce((merged, item) => {
+        const duplicate =
+          item.productId === left.id
+            ? merged.find(
+                (saved) =>
+                  saved.productId === left.id &&
+                  (!saved.variantId || !item.variantId || saved.variantId === item.variantId)
+              )
+            : null
+        if (!duplicate) return [...merged, item]
+        return merged.map((saved) =>
+          saved.id === duplicate.id
+            ? {
+                ...saved,
+                variantId: saved.variantId || item.variantId || '',
+                variety: saved.variety || item.variety || '',
+                quantity: Number(saved.quantity || 0) + Number(item.quantity || 0),
+                note: [...new Set([saved.note, item.note].filter(Boolean))].join(' · '),
+              }
+            : saved
+        )
+      }, [])
+
+  const pairKey = buildDismissedPairKey(left.id, right.id)
+
+  return refreshPurchaseMetadata({
+    ...state,
+    products: state.products.map((product) =>
+      product.id === left.id
+        ? resultProduct
+        : product.id === right.id
+          ? { ...product, archivedAt: now, mergedIntoId: left.id, updatedAt: now }
+          : product
+    ),
+    purchases: updatedPurchases,
+    lists: state.lists.map((list) => ({ ...list, items: redirectListItems(list.items) })),
+    productMappings: (state.productMappings || []).map((mapping) =>
+      mapping.productId === right.id
+        ? {
+            ...mapping,
+            productId: left.id,
+            productName: resultProduct.name,
+            category: resultProduct.category,
+            variantId: combined.variantIdMap[mapping.variantId] || mapping.variantId || '',
+            updatedAt: now,
+          }
+        : mapping.productId === left.id
+          ? {
+              ...mapping,
+              productName: resultProduct.name,
+              category: resultProduct.category,
+              updatedAt: now,
+            }
+          : mapping
+    ),
+    productNormalizations: [
+      {
+        id: uid(),
+        leftProductId: left.id,
+        rightProductId: right.id,
+        leftName: left.name,
+        rightName: right.name,
+        resultName: resultProduct.name,
+        mode: plan.mode,
+        variantValue: plan.variantValue || '',
+        createdAt: now,
+        updatedAt: now,
+      },
+      ...(state.productNormalizations || []),
+    ],
+    dismissedMergePairs: (state.dismissedMergePairs || []).filter((entry) => entry?.id !== pairKey),
+  })
+}
+
+export const PERIODICITY_OPTIONS = [
+  { value: 'auto', label: 'Automática' },
+  { value: '7', label: 'Semanal' },
+  { value: '14', label: 'A cada 2 semanas' },
+  { value: '30', label: 'Mensal' },
+  { value: '60', label: 'A cada 2 meses' },
+  { value: '90', label: 'A cada 3 meses' },
+  { value: '0', label: 'Só quando eu quiser' },
+]
+
+export function categoryDefaultDays(category) {
+  return (
+    {
+      Hortifruti: 7,
+      Frios: 7,
+      Carnes: 14,
+      Mercearia: 30,
+      Bebidas: 30,
+      Limpeza: 60,
+      Higiene: 60,
+      Temperos: 60,
+      Outros: 30,
+    }[category] || 30
+  )
+}
+
+export function nearestPeriod(days) {
+  return [7, 14, 30, 60, 90].reduce(
+    (best, value) => (Math.abs(value - days) < Math.abs(best - days) ? value : best),
+    30
+  )
+}
+
+export function periodicityLabel(days) {
+  return (
+    PERIODICITY_OPTIONS.find((option) => Number(option.value) === Number(days))?.label ||
+    `A cada ${days} dias`
+  )
+}
+
+export function purchasesForProduct(state, productOrName) {
+  const product =
+    typeof productOrName === 'object' && productOrName
+      ? productOrName
+      : (state.products || []).find(
+          (p) => !p.archivedAt && normalizeText(p.name) === normalizeText(productOrName)
+        ) ||
+        (state.products || []).find(
+          (p) => normalizeText(p.name) === normalizeText(productOrName)
+        )
+  const targetName = typeof productOrName === 'string' ? productOrName : product?.name || ''
+
+  return (state.purchases || [])
+    .filter((purchase) =>
+      (purchase.items || []).some((item) =>
+        product
+          ? itemBelongsToProduct(state, item, product)
+          : normalizeText(item.productName) === normalizeText(targetName)
+      )
+    )
+    .sort((a, b) => new Date(b.purchasedAt) - new Date(a.purchasedAt))
+}
+
+export function distinctPurchaseHistoryForProduct(state, productOrName) {
+  const purchases = purchasesForProduct(state, productOrName)
+  const seenDays = new Set()
+  const distinct = []
+  for (const purchase of purchases) {
+    if (!purchase?.purchasedAt) continue
+    const dateObj = new Date(purchase.purchasedAt)
+    if (Number.isNaN(dateObj.getTime())) continue
+    const dayKey = dateObj.toISOString().slice(0, 10)
+    if (seenDays.has(dayKey)) continue
+    seenDays.add(dayKey)
+    distinct.push(purchase)
+  }
+  return distinct
+}
+
+export function calculateHistoryPeriodicity(state, product) {
+  const distinctPurchases = distinctPurchaseHistoryForProduct(state, product)
+  if (distinctPurchases.length < 2) return null
+
+  const recent = distinctPurchases.slice(0, 6)
+  const intervals = []
+  for (let i = 0; i < recent.length - 1; i++) {
+    const diffDays = Math.round(
+      (new Date(recent[i].purchasedAt) - new Date(recent[i + 1].purchasedAt)) / 86400000
+    )
+    if (diffDays > 0) intervals.push(diffDays)
+  }
+  if (!intervals.length) return null
+
+  const sorted = [...intervals].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  const medianDays =
+    sorted.length % 2 === 1
+      ? sorted[mid]
+      : Math.round((sorted[mid - 1] + sorted[mid]) / 2)
+  const days = nearestPeriod(medianDays)
+
+  return {
+    days,
+    label: periodicityLabel(days),
+    medianDays,
+    purchaseCount: distinctPurchases.length,
+    latestPurchasedAt: distinctPurchases[0]?.purchasedAt || null,
+  }
+}
+
+export function periodicityInfo(state, product) {
+  if (product.recurrenceDays != null) {
+    return {
+      days: Number(product.recurrenceDays),
+      label: periodicityLabel(Number(product.recurrenceDays)),
+      source: 'manual',
+    }
+  }
+  const historyCalc = calculateHistoryPeriodicity(state, product)
+  if (historyCalc && product.dismissedRecurrenceSuggestion !== historyCalc.days) {
+    return {
+      days: historyCalc.days,
+      label: historyCalc.label,
+      source: 'history',
+      medianDays: historyCalc.medianDays,
+    }
+  }
+  const days = categoryDefaultDays(product.category)
+  return { days, label: periodicityLabel(days), source: 'category' }
+}
+
+export function findPeriodicitySuggestions(state, options = {}) {
+  const { includeDismissed = false } = options
+  const suggestions = []
+
+  for (const product of state.products || []) {
+    if (!product || product.archivedAt || product.mergedIntoId) continue
+
+    const historyCalc = calculateHistoryPeriodicity(state, product)
+    if (!historyCalc) continue
+
+    const suggestedDays = historyCalc.days
+    const isAuto = product.recurrenceDays == null
+    const currentDays = isAuto
+      ? categoryDefaultDays(product.category)
+      : Number(product.recurrenceDays)
+
+    if (currentDays === suggestedDays) continue
+
+    const isDismissed = Number(product.dismissedRecurrenceSuggestion) === suggestedDays
+    if (isDismissed && !includeDismissed) continue
+
+    const currentLabel = isAuto
+      ? `Automática (${periodicityLabel(currentDays)})`
+      : periodicityLabel(currentDays)
+    const suggestedLabel = periodicityLabel(suggestedDays)
+
+    suggestions.push({
+      id: `periodicity-${product.id}`,
+      product,
+      productId: product.id,
+      isAuto,
+      currentDays,
+      currentLabel,
+      suggestedDays,
+      suggestedLabel,
+      medianDays: historyCalc.medianDays,
+      purchaseCount: historyCalc.purchaseCount,
+      latestPurchasedAt: historyCalc.latestPurchasedAt,
+      dismissed: isDismissed,
+      reason: `Comprado a cada ~${historyCalc.medianDays} ${historyCalc.medianDays === 1 ? 'dia' : 'dias'} (${historyCalc.purchaseCount} compras)`,
+    })
+  }
+
+  return suggestions.sort((a, b) => {
+    if (b.purchaseCount !== a.purchaseCount) return b.purchaseCount - a.purchaseCount
+    return a.product.name.localeCompare(b.product.name, 'pt-BR')
+  })
+}
+
+export function nextPurchaseSuggestions(state, list, now = new Date()) {
+  const items = list?.items || []
+  const inListNames = new Set(items.map((item) => normalizeText(item.name || item.productName)))
+  const inListIds = new Set(items.map((item) => item.productId).filter(Boolean))
+  const currentNow = now instanceof Date ? now : new Date(now)
+  const candidates = []
+
+  for (const product of state.products || []) {
+    if (!product || product.archivedAt || product.mergedIntoId) continue
+    if (inListIds.has(product.id) || inListNames.has(normalizeText(product.name))) continue
+
+    const history = distinctPurchaseHistoryForProduct(state, product)
+    if (!history.length && product.recurrenceDays == null) continue
+
+    const frequency = periodicityInfo(state, product)
+    if (frequency.days <= 0) continue
+
+    const dueAt = history.length
+      ? new Date(new Date(history[0].purchasedAt).getTime() + frequency.days * 86400000)
+      : currentNow
+    const daysUntil = Math.ceil((dueAt - currentNow) / 86400000)
+
+    if (daysUntil <= 7) {
+      candidates.push({
+        product,
+        daysUntil,
+        frequency,
+        lastPurchasedAt: history[0]?.purchasedAt || null,
+      })
+    }
+  }
+
+  return candidates
+    .sort((a, b) => {
+      if (a.daysUntil !== b.daysUntil) return a.daysUntil - b.daysUntil
+      return a.product.name.localeCompare(b.product.name, 'pt-BR')
+    })
+    .map((entry) => entry.product)
+}
+
+

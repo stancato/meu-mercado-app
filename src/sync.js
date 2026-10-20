@@ -47,7 +47,13 @@ const mergeItemArrays = (base = [], local = [], remote = [], tombstones = [], lo
   })
 }
 
-const entryTime = (entry) => asTime(entry?.updatedAt || entry?.purchasedAt || entry?.createdAt || 0)
+const entryTime = (entry) =>
+  Math.max(
+    asTime(entry?.updatedAt),
+    asTime(entry?.archivedAt),
+    asTime(entry?.purchasedAt),
+    asTime(entry?.createdAt),
+  )
 
 const mergeEntityArrays = (base = [], local = [], remote = []) => {
   const keyOf = (entry) => String(entry?.id || '')
@@ -68,6 +74,9 @@ const mergeEntityArrays = (base = [], local = [], remote = []) => {
     const remoteTime = entryTime(remoteEntry)
     if (localTime !== remoteTime) {
       return localTime > remoteTime ? [localEntry] : [remoteEntry]
+    }
+    if (Boolean(localEntry.mergedIntoId) !== Boolean(remoteEntry.mergedIntoId)) {
+      return localEntry.mergedIntoId ? [localEntry] : [remoteEntry]
     }
     const localVariants = Array.isArray(localEntry.variants) ? localEntry.variants.length : 0
     const remoteVariants = Array.isArray(remoteEntry.variants) ? remoteEntry.variants.length : 0
@@ -106,6 +115,7 @@ export function mergeSyncedStates(base = {}, local = {}, remote = {}) {
     markets: mergeEntityArrays(base.markets, local.markets, remote.markets),
     productMappings: mergeEntityArrays(base.productMappings, local.productMappings, remote.productMappings),
     productNormalizations: mergeEntityArrays(base.productNormalizations, local.productNormalizations, remote.productNormalizations),
+    dismissedMergePairs: mergeEntityArrays(base.dismissedMergePairs, local.dismissedMergePairs, remote.dismissedMergePairs),
     deletedListItems,
     updatedAt: localIsNewer ? localTime : remoteTime,
   }

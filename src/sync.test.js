@@ -98,3 +98,30 @@ test('produto editado localmente com timestamp mais recente prevalece sobre cóp
   assert.equal(merged.products[0].variants.length, 2)
 })
 
+test('produto mesclado/arquivado prevalece sobre cópia antiga não arquivada e dismissedMergePairs são sincronizados', () => {
+  const remoteActiveProduct = {
+    id: 'prod-2',
+    name: 'Café Pilão',
+    archivedAt: null,
+    mergedIntoId: null,
+    updatedAt: '2026-08-21T10:00:00.000Z',
+  }
+  const localMergedProduct = {
+    id: 'prod-2',
+    name: 'Café Pilão',
+    archivedAt: '2026-08-21T10:20:00.000Z',
+    mergedIntoId: 'prod-1',
+    updatedAt: '2026-08-21T10:20:00.000Z',
+  }
+  const localDismissed = [{ id: 'p1::p2', leftId: 'p1', rightId: 'p2', dismissed: true, updatedAt: '2026-08-21T10:20:00.000Z' }]
+  const remoteDismissed = [{ id: 'p3::p4', leftId: 'p3', rightId: 'p4', dismissed: true, updatedAt: '2026-08-21T10:10:00.000Z' }]
+
+  const localState = state([], '2026-08-21T10:20:00.000Z', { products: [localMergedProduct], dismissedMergePairs: localDismissed })
+  const remoteState = state([], '2026-08-21T10:10:00.000Z', { products: [remoteActiveProduct], dismissedMergePairs: remoteDismissed })
+
+  const merged = mergeSyncedStates({}, localState, remoteState)
+  assert.equal(merged.products[0].mergedIntoId, 'prod-1')
+  assert.equal(merged.products[0].archivedAt, '2026-08-21T10:20:00.000Z')
+  assert.equal(merged.dismissedMergePairs.length, 2)
+})
+

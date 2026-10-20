@@ -72,6 +72,7 @@ export async function loadCloudState(userId) {
         settings: preferences.settings || { theme: 'system' },
         productMappings: Array.isArray(preferences.productMappings) ? preferences.productMappings : [],
         productNormalizations: Array.isArray(preferences.productNormalizations) ? preferences.productNormalizations : [],
+        dismissedMergePairs: Array.isArray(preferences.dismissedMergePairs) ? preferences.dismissedMergePairs : [],
         deletedListItems: Array.isArray(list.deletedListItems) ? list.deletedListItems : Array.isArray(preferences.deletedListItems) ? preferences.deletedListItems : [],
         // A lista e as preferências são gravadas em operações separadas. A data
         // da própria lista é a fonte mais recente para resolver conflitos nela.
@@ -133,6 +134,7 @@ export async function saveCloudState(userId, state, userProfile, baseState = {})
     settings: savedState.settings || { theme: 'system' },
     productMappings: savedState.productMappings || [],
     productNormalizations: savedState.productNormalizations || [],
+    dismissedMergePairs: savedState.dismissedMergePairs || [],
     deletedListItems: savedState.deletedListItems || [],
     updatedAt: savedState.updatedAt || new Date().toISOString(),
     savedAt: serverTimestamp(),

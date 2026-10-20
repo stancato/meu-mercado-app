@@ -19,15 +19,40 @@ const normalizeState = (value = {}) => {
     }
   })
   const savedProducts = Array.isArray(merged.products) ? merged.products : []
-  const products = [...savedProducts]
+  const products = []
+  const byId = new Map()
+  savedProducts.forEach((product) => {
+    if (!product || !product.id) return
+    const existing = byId.get(product.id)
+    if (!existing) {
+      byId.set(product.id, product)
+      products.push(product)
+    } else {
+      const existingCustomized = Boolean(existing.updatedAt || existing.archivedAt || existing.mergedIntoId || (existing.aliases && existing.aliases.length) || (existing.variants && existing.variants.length))
+      const currentCustomized = Boolean(product.updatedAt || product.archivedAt || product.mergedIntoId || (product.aliases && product.aliases.length) || (product.variants && product.variants.length))
+      if (currentCustomized && !existingCustomized) {
+        const idx = products.indexOf(existing)
+        if (idx >= 0) products[idx] = product
+        byId.set(product.id, product)
+      }
+    }
+  })
   STARTER_PRODUCTS.forEach((starter) => {
-    if (!products.some((product) => normalizeText(product.name) === normalizeText(starter.name))) products.push(starter)
+    const starterKey = normalizeText(starter.name)
+    const exists = products.some(
+      (product) =>
+        product.id === starter.id ||
+        normalizeText(product.name) === starterKey ||
+        (product.aliases || []).some((alias) => normalizeText(alias) === starterKey)
+    )
+    if (!exists) products.push(starter)
   })
   return {
     ...merged,
     products,
     productMappings: Array.isArray(merged.productMappings) ? merged.productMappings : [],
     productNormalizations: Array.isArray(merged.productNormalizations) ? merged.productNormalizations : [],
+    dismissedMergePairs: Array.isArray(merged.dismissedMergePairs) ? merged.dismissedMergePairs : [],
     deletedListItems: Array.isArray(merged.deletedListItems) ? merged.deletedListItems : [],
     lists: [{ ...oldLists[0], id: 'shopping-list', name: 'Lista de mercado', status: 'active', items: uniqueItems, createdAt: oldLists[0]?.createdAt || new Date().toISOString() }],
     activePurchase: undefined,

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseJsonInput, mergeProductVariants, promoteVariantToProduct, updatePurchaseItem, parseNfceHtml, normalizeImport, findMatchingVariant, levenshteinDistance, findDuplicateProductSuggestions } from './data.js'
+import { parseJsonInput, mergeProductVariants, promoteVariantToProduct, updatePurchaseItem, parseNfceHtml, normalizeImport, findMatchingVariant, levenshteinDistance, findDuplicateProductSuggestions, mergeCatalogProducts, buildDismissedPairKey, findPeriodicitySuggestions, calculateHistoryPeriodicity, nextPurchaseSuggestions } from './data.js'
 
 test('parseJsonInput interpreta JSON padrão', () => {
   const json = '{"mercado": {"nome": "Extra"}, "itens": [{"produto": "Arroz", "precoTotal": 20}]}'
@@ -276,6 +276,7 @@ test('updatePurchaseItem cria nova variedade no produto e atualiza historico e t
   assert.equal(nextState.productMappings.length, 1)
   assert.equal(nextState.productMappings[0].variantId, newVariant.id)
   assert.equal(nextState.productMappings[0].productId, 'prod-chocolate')
+  assert.equal(nextState.productMappings[0].sourceKey, 'barcode:7891234567890')
 })
 
 test('updatePurchaseItem remapeia item para outro produto existente', () => {
@@ -502,14 +503,206 @@ test('findDuplicateProductSuggestions detecta produtos com mesmo código de barr
   assert.equal(suggestions[0].score, 1.0)
 })
 
-test('findDuplicateProductSuggestions ignora produtos arquivados e pares dispensados', () => {
+test('findDuplicateProductSuggestions ignora produtos arquivados e pares dispensados (inclusive via dismissedMergePairs)', () => {
   const products = [
     { id: 'p1', name: 'Leite', category: 'Frios', variants: [] },
     { id: 'p2', name: 'Leite Integral', category: 'Frios', variants: [] },
     { id: 'p3', name: 'Leite Desnatado', category: 'Frios', archivedAt: '2026-01-01T00:00:00Z', variants: [] },
   ]
   const dismissedPairIds = new Set([[ 'p1', 'p2' ].sort().join('::')])
-  const suggestions = findDuplicateProductSuggestions(products, { dismissedPairIds })
+  assert.equal(findDuplicateProductSuggestions(products, { dismissedPairIds }).length, 0)
+
+  // Usando a lista persistida dismissedMergePairs (por ID ou por nome)
+  const dismissedMergePairs = [
+    { id: buildDismissedPairKey('other-1', 'other-2'), leftId: 'other-1', rightId: 'other-2', leftName: 'Leite', rightName: 'Leite Integral', dismissed: true },
+  ]
+  assert.equal(findDuplicateProductSuggestions(products, { dismissedMergePairs }).length, 0)
+
+  // Quando restaurado (dismissed: false), volta a sugerir
+  const restoredPairs = [
+    { id: buildDismissedPairKey('p1', 'p2'), leftId: 'p1', rightId: 'p2', leftName: 'Leite', rightName: 'Leite Integral', dismissed: false },
+  ]
+  assert.equal(findDuplicateProductSuggestions(products, { dismissedMergePairs: restoredPairs }).length, 1)
+})
+
+test('findDuplicateProductSuggestions evita falsos positivos comuns de produtos distintos', () => {
+  const products = [
+    { id: 'p-leite', name: 'Leite', category: 'Frios', variants: [] },
+    { id: 'p-leite-cond', name: 'Leite Condensado', category: 'Mercearia', variants: [] },
+    { id: 'p-queijo', name: 'Queijo', category: 'Frios', variants: [] },
+    { id: 'p-pao-queijo', name: 'Pão de queijo', category: 'Frios', variants: [] },
+    { id: 'p-tomate', name: 'Tomate', category: 'Hortifruti', variants: [] },
+    { id: 'p-molho-tomate', name: 'Molho de tomate', category: 'Mercearia', variants: [] },
+    { id: 'p-papel-hig', name: 'Papel higiênico', category: 'Higiene', variants: [] },
+    { id: 'p-papel-toalha', name: 'Papel-toalha', category: 'Limpeza', variants: [] },
+    { id: 'p-pera', name: 'Pera', category: 'Hortifruti', variants: [] },
+    { id: 'p-cera', name: 'Cera', category: 'Limpeza', variants: [] },
+  ]
+  const suggestions = findDuplicateProductSuggestions(products)
   assert.equal(suggestions.length, 0)
+})
+
+test('mergeCatalogProducts unifica produtos, preserva historico de compras, atualiza updatedAt no arquivado e recalcula metadados', () => {
+  const initialState = {
+    products: [
+      { id: 'p-cafe', name: 'Café', category: 'Mercearia', defaultUnit: 'pacote', variants: [], updatedAt: '2026-01-01T00:00:00Z' },
+      { id: 'p-cafe-pilao', name: 'Café Pilão', category: 'Mercearia', defaultUnit: 'pacote', variants: [], updatedAt: '2026-01-01T00:00:00Z' },
+    ],
+    purchases: [
+      {
+        id: 'purch-1',
+        marketId: 'm1',
+        marketName: 'Mercado X',
+        purchasedAt: '2026-03-10T12:00:00Z',
+        total: 18.9,
+        items: [
+          { id: 'i1', productId: 'p-cafe-pilao', productName: 'Café Pilão', variety: '', brand: 'Pilão', packageSize: 500, packageUnit: 'g', quantity: 1, unitPrice: 18.9, totalPrice: 18.9 },
+        ],
+      },
+    ],
+    lists: [
+      {
+        id: 'list-1',
+        items: [
+          { id: 'li-1', productId: 'p-cafe', name: 'Café', quantity: 1, unit: 'pacote', category: 'Mercearia' },
+          { id: 'li-2', productId: 'p-cafe-pilao', name: 'Café Pilão', quantity: 2, unit: 'pacote', category: 'Mercearia' },
+        ],
+      },
+    ],
+    productMappings: [
+      { id: 'map-1', sourceKey: 'description:cafe pilao 500g', productId: 'p-cafe-pilao', variantId: '' },
+    ],
+    productNormalizations: [],
+  }
+
+  const nextState = mergeCatalogProducts(initialState, {
+    leftId: 'p-cafe',
+    rightId: 'p-cafe-pilao',
+    mode: 'variant',
+    variantValue: 'Pilão',
+    result: { name: 'Café', category: 'Mercearia', defaultUnit: 'pacote' },
+  })
+
+  const mainProduct = nextState.products.find((p) => p.id === 'p-cafe')
+  const archivedProduct = nextState.products.find((p) => p.id === 'p-cafe-pilao')
+
+  assert.equal(mainProduct.archivedAt, null)
+  assert.ok(mainProduct.aliases.includes('Café Pilão'))
+  assert.equal(mainProduct.variants.length, 1)
+  assert.equal(mainProduct.variants[0].variety, 'Pilão')
+  assert.equal(mainProduct.variants[0].lastPrice, 18.9)
+  assert.equal(mainProduct.variants[0].lastMarketName, 'Mercado X')
+
+  assert.ok(archivedProduct.archivedAt)
+  assert.equal(archivedProduct.mergedIntoId, 'p-cafe')
+  assert.notEqual(archivedProduct.updatedAt, '2026-01-01T00:00:00Z')
+
+  assert.equal(nextState.purchases[0].items[0].productId, 'p-cafe')
+  assert.equal(nextState.purchases[0].items[0].productName, 'Café')
+  assert.equal(nextState.purchases[0].items[0].variety, 'Pilão')
+  assert.equal(nextState.purchases[0].items[0].variantId, mainProduct.variants[0].id)
+
+  assert.equal(nextState.lists[0].items.length, 1)
+  assert.equal(nextState.lists[0].items[0].quantity, 3)
+
+  assert.equal(nextState.productMappings[0].productId, 'p-cafe')
+})
+
+test('findPeriodicitySuggestions detecta compras semanais e ignora sugestões dispensadas ou iguais', () => {
+  const products = [
+    { id: 'p-pao', name: 'Pão', category: 'Mercearia', recurrenceDays: null, dismissedRecurrenceSuggestion: null },
+    { id: 'p-leite', name: 'Leite', category: 'Laticínios', recurrenceDays: 7, dismissedRecurrenceSuggestion: null },
+    { id: 'p-cafe', name: 'Café', category: 'Mercearia', recurrenceDays: null, dismissedRecurrenceSuggestion: 14 },
+  ]
+
+  const purchases = [
+    {
+      id: 'pur-1',
+      purchasedAt: '2026-10-01T10:00:00Z',
+      items: [
+        { id: 'i1', productId: 'p-pao', productName: 'Pão', totalPrice: 8.5 },
+        { id: 'i2', productId: 'p-pao', productName: 'Pão', totalPrice: 8.5 }, // mesmo dia, deve deduplicar
+        { id: 'i3', productId: 'p-leite', productName: 'Leite', totalPrice: 5.5 },
+        { id: 'i4', productId: 'p-cafe', productName: 'Café', totalPrice: 18.0 },
+      ],
+    },
+    {
+      id: 'pur-2',
+      purchasedAt: '2026-10-08T10:00:00Z',
+      items: [
+        { id: 'i5', productId: 'p-pao', productName: 'Pão', totalPrice: 9.0 },
+        { id: 'i6', productId: 'p-leite', productName: 'Leite', totalPrice: 5.8 },
+      ],
+    },
+    {
+      id: 'pur-3',
+      purchasedAt: '2026-10-15T10:00:00Z',
+      items: [
+        { id: 'i7', productId: 'p-pao', productName: 'Pão', totalPrice: 8.9 },
+        { id: 'i8', productId: 'p-cafe', productName: 'Café', totalPrice: 18.5 },
+      ],
+    },
+  ]
+
+  const state = { products, purchases }
+  const paoHistory = calculateHistoryPeriodicity(state, products[0])
+  assert.equal(paoHistory.purchaseCount, 3)
+  assert.equal(paoHistory.days, 7)
+
+  const suggestions = findPeriodicitySuggestions(state)
+  assert.equal(suggestions.length, 1)
+  assert.equal(suggestions[0].product.id, 'p-pao')
+  assert.equal(suggestions[0].currentDays, 30) // padrão de Mercearia
+  assert.equal(suggestions[0].suggestedDays, 7)
+  assert.equal(suggestions[0].suggestedLabel, 'Semanal')
+})
+
+test('nextPurchaseSuggestions retorna apenas itens para a próxima compra (<= 7 dias) que não estão na lista', () => {
+  const now = new Date()
+  const sixDaysAgo = new Date(now.getTime() - 6 * 86400000).toISOString()
+  const thirteenDaysAgo = new Date(now.getTime() - 13 * 86400000).toISOString()
+  const twoDaysAgo = new Date(now.getTime() - 2 * 86400000).toISOString()
+
+  const products = [
+    { id: 'p-pao', name: 'Pão', category: 'Mercearia', defaultUnit: 'pacote', recurrenceDays: null },
+    { id: 'p-arroz', name: 'Arroz', category: 'Mercearia', defaultUnit: 'pacote', recurrenceDays: 30 },
+    { id: 'p-leite', name: 'Leite', category: 'Laticínios', defaultUnit: 'caixa', recurrenceDays: 7 },
+  ]
+
+  const purchases = [
+    {
+      id: 'pur-old',
+      purchasedAt: thirteenDaysAgo,
+      items: [
+        { id: 'i1', productId: 'p-pao', productName: 'Pão', totalPrice: 8.5 },
+      ],
+    },
+    {
+      id: 'pur-recent',
+      purchasedAt: sixDaysAgo,
+      items: [
+        { id: 'i2', productId: 'p-pao', productName: 'Pão', totalPrice: 9.0 },
+        { id: 'i3', productId: 'p-leite', productName: 'Leite', totalPrice: 5.5 },
+      ],
+    },
+    {
+      id: 'pur-very-recent',
+      purchasedAt: twoDaysAgo,
+      items: [
+        { id: 'i4', productId: 'p-arroz', productName: 'Arroz', totalPrice: 25.0 },
+      ],
+    },
+  ]
+
+  // Leite já está na lista de compras; Arroz falta ~28 dias; Pão tem histórico semanal (comprado há 6 dias -> falta 1 dia)
+  const list = {
+    items: [
+      { id: 'li-1', productId: 'p-leite', name: 'Leite' },
+    ],
+  }
+
+  const suggestions = nextPurchaseSuggestions({ products, purchases }, list, now)
+  assert.equal(suggestions.length, 1)
+  assert.equal(suggestions[0].id, 'p-pao')
 })
 
