@@ -270,13 +270,27 @@ function ShoppingListPage({ state, mutate, open }) {
       onAdd={addProduct}
       onAddAll={addSuggestedProducts}
     />
-    <div className="toolbar shopping-list-toolbar"><span className="list-count">{list.items.length} {list.items.length === 1 ? 'item' : 'itens'}</span><div className="list-view-actions">{list.items.length > 0 && <button className="share-list-button" aria-label="Compartilhar lista" title="Compartilhar lista" onClick={() => open({ type: 'share-list' })}><Share2 size={16}/><span>Compartilhar</span></button>}<button className={`group-toggle ${groupByCategory ? 'active' : ''}`} aria-label="Agrupar por categoria" title="Agrupar por categoria" aria-pressed={groupByCategory} onClick={() => setGroupByCategory((current) => !current)}><Tags size={16}/><span>Agrupar por categoria</span></button><div className="view-toggle" aria-label="Modo de visualização"><button className={viewMode === 'list' ? 'active' : ''} title="Visualizar em lista" aria-label="Visualizar em lista" aria-pressed={viewMode === 'list'} onClick={() => setViewMode('list')}><List size={18}/></button><button className={viewMode === 'grid' ? 'active' : ''} title="Visualizar em grade" aria-label="Visualizar em grade" aria-pressed={viewMode === 'grid'} onClick={() => setViewMode('grid')}><LayoutGrid size={18}/></button></div></div></div>
-    {list.items.length > 0 && <section className={`shopping-estimate ${estimate.pricedCount ? '' : 'empty'}`} aria-label="Estimativa do valor da compra">
-      <span className="shopping-estimate-icon"><CircleDollarSign size={18}/></span>
-      <div><small>Total estimado da compra</small><strong>{estimate.pricedCount ? money(estimate.total) : 'Sem estimativa'}</strong></div>
-      <p>{estimate.pricedCount ? <>Com base no último preço de {estimate.pricedCount} {estimate.pricedCount === 1 ? 'item' : 'itens'}{estimate.missingCount ? ` · ${estimate.missingCount} sem histórico` : ''}</> : 'Registre uma compra para formar o histórico de preços.'}</p>
-      <button type="button" className={showItemEstimates ? 'estimate-item-toggle active' : 'estimate-item-toggle'} aria-pressed={showItemEstimates} onClick={() => setShowItemEstimates((current) => !current)}>{showItemEstimates ? <EyeOff size={15}/> : <Eye size={15}/>}<span>{showItemEstimates ? 'Ocultar nos itens' : 'Valores nos itens'}</span></button>
-    </section>}
+    <div className="toolbar shopping-list-toolbar">
+      <span className="list-count">{list.items.length} {list.items.length === 1 ? 'item' : 'itens'}</span>
+      <div className="list-view-actions">
+        {list.items.length > 0 && (
+          <button
+            type="button"
+            className={`estimate-toggle-button ${showItemEstimates ? 'active' : ''} ${estimate.pricedCount ? '' : 'empty'}`}
+            aria-label={estimate.pricedCount ? `Total estimado ${money(estimate.total)}. Toque para ${showItemEstimates ? 'ocultar' : 'mostrar'} valores nos itens` : 'Sem estimativa de preço. Toque para alternar valores nos itens'}
+            title={estimate.pricedCount ? `Total estimado: ${money(estimate.total)} (baseado em ${estimate.pricedCount} ${estimate.pricedCount === 1 ? 'item' : 'itens'}${estimate.missingCount ? ` · ${estimate.missingCount} sem histórico` : ''}) — Toque para ${showItemEstimates ? 'ocultar' : 'mostrar'} preços nos itens` : 'Registre uma compra para formar o histórico de preços'}
+            aria-pressed={showItemEstimates}
+            onClick={() => setShowItemEstimates((current) => !current)}
+          >
+            <CircleDollarSign size={16} />
+            <span>{estimate.pricedCount ? money(estimate.total) : 'R$ --'}</span>
+          </button>
+        )}
+        {list.items.length > 0 && <button className="share-list-button" aria-label="Compartilhar lista" title="Compartilhar lista" onClick={() => open({ type: 'share-list' })}><Share2 size={16}/><span>Compartilhar</span></button>}
+        <button className={`group-toggle ${groupByCategory ? 'active' : ''}`} aria-label="Agrupar por categoria" title="Agrupar por categoria" aria-pressed={groupByCategory} onClick={() => setGroupByCategory((current) => !current)}><Tags size={16}/><span>Agrupar por categoria</span></button>
+        <div className="view-toggle" aria-label="Modo de visualização"><button className={viewMode === 'list' ? 'active' : ''} title="Visualizar em lista" aria-label="Visualizar em lista" aria-pressed={viewMode === 'list'} onClick={() => setViewMode('list')}><List size={18}/></button><button className={viewMode === 'grid' ? 'active' : ''} title="Visualizar em grade" aria-label="Visualizar em grade" aria-pressed={viewMode === 'grid'} onClick={() => setViewMode('grid')}><LayoutGrid size={18}/></button></div>
+      </div>
+    </div>
     {list.items.length ? <div className="shopping-list-content">
       {pendingItems.length > 0 && (groupByCategory ? <div className="category-groups">{groups.map((group) => <section className={`category-group category-${categoryKey(group.category)}`} key={group.category}><header><CategoryIcon category={group.category} size={17}/><div><h2>{group.category}</h2><span>{group.items.length} {group.items.length === 1 ? 'item' : 'itens'}</span></div></header><div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{group.items.map(renderItem)}</div></section>)}</div> : <div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{pendingItems.map(renderItem)}</div>)}
       {completedItems.length > 0 && <section className="completed-items-group"><header><div><h2>Concluídos</h2><span>{completedItems.length} {completedItems.length === 1 ? 'item' : 'itens'}</span></div><button className="clear-completed" onClick={clearCompleted}><Trash2 size={15}/> Limpar concluídos</button></header><div className={`item-list ${viewMode === 'grid' ? 'grid-view' : ''}`}>{completedItems.map(renderItem)}</div></section>}
