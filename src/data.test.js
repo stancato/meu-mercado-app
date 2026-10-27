@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseJsonInput, mergeProductVariants, promoteVariantToProduct, updatePurchaseItem, parseNfceHtml, normalizeImport, findMatchingVariant, levenshteinDistance, findDuplicateProductSuggestions, mergeCatalogProducts, buildDismissedPairKey, findPeriodicitySuggestions, calculateHistoryPeriodicity, nextPurchaseSuggestions } from './data.js'
+import { parseJsonInput, mergeProductVariants, promoteVariantToProduct, updatePurchaseItem, parseNfceHtml, isValidNfceHtml, normalizeImport, findMatchingVariant, levenshteinDistance, findDuplicateProductSuggestions, mergeCatalogProducts, buildDismissedPairKey, findPeriodicitySuggestions, calculateHistoryPeriodicity, nextPurchaseSuggestions } from './data.js'
 
 test('parseJsonInput interpreta JSON padrão', () => {
   const json = '{"mercado": {"nome": "Extra"}, "itens": [{"produto": "Arroz", "precoTotal": 20}]}'
@@ -415,6 +415,70 @@ test('parseNfceHtml extrai dados do estabelecimento, itens, valores e data da NF
   assert.equal(normalized.market.name, 'SUPERMERCADOS DALBEN LTDA')
   assert.equal(normalized.items.length, 2)
   assert.equal(normalized.items[0].productName, 'SANSEVIEIRA VEILING P12')
+})
+
+test('parseNfceHtml suporta layout mobile QR Code (txtTit2, entidades HTML) e texto plano copiado da SEFAZ', () => {
+  const mobileHtml = `
+    <div class="txtTopo">MERCADO EXEMPLO LTDA</div>
+    <div class="text">CNPJ: 12.345.678/0001-99</div>
+    <table>
+      <tr class="linha" id="Item + 1">
+        <td>
+          <span class="txtTit2">LEITE INTEGRAL 1L</span>
+          <span class="RCod">(C&oacute;digo: 7891000)</span>
+          <span class="Rqtd"><strong>Qtde.:</strong>&nbsp;2</span>
+          <span class="RUN"><strong>UN: </strong>L</span>
+          <span class="RvlUnit"><strong>Vl. Unit.:</strong>&nbsp;5,49</span>
+        </td>
+        <td><span class="valor">10,98</span></td>
+      </tr>
+    </table>
+    <div><strong>N&uacute;mero: </strong>1234 <strong>Emiss&atilde;o: </strong>20/10/2026 14:30:00</div>
+    <div><label>Valor a pagar R$:</label><span class="totalNumb">10,98</span></div>
+  `
+  const fromMobileHtml = parseNfceHtml(mobileHtml)
+  assert.equal(fromMobileHtml.mercado.nome, 'MERCADO EXEMPLO LTDA')
+  assert.equal(fromMobileHtml.itens.length, 1)
+  assert.equal(fromMobileHtml.itens[0].produto, 'LEITE INTEGRAL 1L')
+  assert.equal(fromMobileHtml.itens[0].quantidadeComprada, 2)
+  assert.equal(fromMobileHtml.itens[0].unidadeConteudo, 'L')
+  assert.equal(fromMobileHtml.itens[0].precoTotal, 10.98)
+
+  const copiedText = `
+    DOCUMENTO AUXILIAR DA NOTA FISCAL DE CONSUMIDOR ELETRÔNICA
+    SUPERMERCADO CENTRAL
+    CNPJ: 11.222.333/0001-44
+    RUA DAS FLORES, 100, CENTRO
+    ARROZ TIPO 1 5KG (Código: 102030)
+    Qtde.: 1 UN: UN Vl. Unit.: 28,90 Vl. Total 28,90
+    BANANA NANICA (Código: 4050)
+    Qtde.: 1,250 UN: KG Vl. Unit.: 6,00 Vl. Total 7,50
+    Valor a pagar R$: 36,40
+    Número: 9876 Série: 1 Emissão: 25/10/2026 09:15:00
+  `
+  const fromPlainText = parseNfceHtml(copiedText)
+  assert.equal(fromPlainText.mercado.nome, 'SUPERMERCADO CENTRAL')
+  assert.equal(fromPlainText.mercado.cnpj, '11222333000144')
+  assert.equal(fromPlainText.compra.valorTotal, 36.40)
+  assert.equal(fromPlainText.compra.numeroDocumento, '9876')
+  assert.equal(fromPlainText.itens.length, 2)
+  assert.equal(fromPlainText.itens[0].produto, 'ARROZ TIPO 1 5KG')
+  assert.equal(fromPlainText.itens[0].precoTotal, 28.90)
+  assert.equal(fromPlainText.itens[1].produto, 'BANANA NANICA')
+  assert.equal(fromPlainText.itens[1].unidadeConteudo, 'kg')
+  assert.equal(fromPlainText.itens[1].quantidadeComprada, 1.25)
+  assert.equal(fromPlainText.itens[1].precoTotal, 7.50)
+})
+
+test('isValidNfceHtml rejeita index.html do SPA e páginas de erro Cloudflare 522', () => {
+  const spaIndex = '<!doctype html><html><body><div id="root"></div><script type="module" src="/src/main.jsx"></script>' + 'a'.repeat(800) + '</body></html>'
+  assert.equal(isValidNfceHtml(spaIndex), false)
+
+  const cfError = '<!DOCTYPE html><html><body><div id="cf-error-details">Error 522 Connection timed out</div>' + 'b'.repeat(800) + '</body></html>'
+  assert.equal(isValidNfceHtml(cfError), false)
+
+  const validNfce = '<table id="tabResult"><tr id="Item + 1"><span class="txtTit2">CAFE</span></tr></table>'
+  assert.equal(isValidNfceHtml(validNfce), true)
 })
 
 test('findMatchingVariant localiza variante por variantId ou por características (variedade, marca, embalagem)', () => {

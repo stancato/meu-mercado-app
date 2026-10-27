@@ -470,37 +470,129 @@ export function buildReceiptPrompt(products = [], options = {}) {
   return prompt
 }
 
-export function parseNfceHtml(htmlString) {
-  if (!htmlString || typeof htmlString !== 'string') {
-    throw new Error('Conteúdo HTML da nota fiscal não informado.')
+function decodeHtmlEntities(input = '') {
+  const named = {
+    nbsp: ' ',
+    amp: '&',
+    lt: '<',
+    gt: '>',
+    quot: '"',
+    apos: "'",
+    aacute: 'á', Aacute: 'Á',
+    acirc: 'â', Acirc: 'Â',
+    atilde: 'ã', Atilde: 'Ã',
+    agrave: 'à', Agrave: 'À',
+    eacute: 'é', Eacute: 'É',
+    ecirc: 'ê', Ecirc: 'Ê',
+    iacute: 'í', Iacute: 'Í',
+    oacute: 'ó', Oacute: 'Ó',
+    ocirc: 'ô', Ocirc: 'Ô',
+    otilde: 'õ', Otilde: 'Õ',
+    uacute: 'ú', Uacute: 'Ú',
+    ccedil: 'ç', Ccedil: 'Ç',
+  }
+  return String(input || '')
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(Number(dec)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/&([a-zA-Z]+);/g, (full, name) => named[name] ?? full)
+}
+
+function stripHtmlTags(str = '') {
+  return decodeHtmlEntities(String(str || '').replace(/<[^>]+>/g, ' '))
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function mapNfceUnit(unitRaw = '') {
+  const u = String(unitRaw || '').trim().toLowerCase()
+  if (u === 'kg') return 'kg'
+  if (u === 'g' || u === 'gr') return 'g'
+  if (u === 'l' || u === 'lt') return 'L'
+  if (u === 'ml') return 'ml'
+  return 'un'
+}
+
+export function parseNfceHtml(rawInput) {
+  if (!rawInput || typeof rawInput !== 'string' || !rawInput.trim()) {
+    throw new Error('Conteúdo da nota fiscal não informado.')
   }
 
-  const clean = (str) => String(str || '').replace(/\s+/g, ' ').trim()
+  const htmlString = decodeHtmlEntities(rawInput)
+  const clean = (str) => stripHtmlTags(str)
   const parseNum = (str) => {
     if (!str) return 0
-    const cleaned = String(str).replace(/[^\d,.-]/g, '').replace(',', '.')
-    return Number(cleaned) || 0
+    let s = String(str).replace(/[^\d,.-]/g, '')
+    if (s.includes(',') && s.includes('.')) {
+      s = s.replace(/\./g, '').replace(',', '.')
+    } else {
+      s = s.replace(',', '.')
+    }
+    return Number(s) || 0
   }
+
+  // Verificar se a própria SEFAZ retornou mensagem de erro no HTML
+  const sefazErrMatch = htmlString.match(/spnErro(?:Prosseguir)?Master['"]\)\.html\(['"]([\s\S]*?)['"]\)/i)
+    || htmlString.match(/id=["']spnErro(?:Prosseguir)?Master["'][^>]*>([\s\S]*?)<\/span>/i)
+  if (sefazErrMatch) {
+    const errText = clean(sefazErrMatch[1])
+    if (errText) {
+      throw new Error(`A SEFAZ retornou um erro para esta nota: ${errText}`)
+    }
+  }
+
+  // Texto plano com quebras de linha preservadas (usado como fallback ou quando o usuário cola o texto copiado da SEFAZ)
+  const plainLines = htmlString
+    .replace(/<(?:script|style)\b[^>]*>[\s\S]*?<\/(?:script|style)>/gi, ' ')
+    .replace(/<(?:br|\/tr|\/div|\/p|\/li|\/h[1-6]|\/table)\b[^>]*>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+  const plainText = plainLines.join('\n')
 
   // 1. Extrair Estabelecimento / Mercado
   let marketName = ''
-  const u20Match = htmlString.match(/id=["']u20["'][^>]*>([^<]+)</i) || htmlString.match(/class=["']txtTopo["'][^>]*>([^<]+)</i)
+  const u20Match = htmlString.match(/id=["']u20["'][^>]*>([\s\S]*?)<\/div>/i)
+    || htmlString.match(/class=["'][^"']*\btxtTopo\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)
   if (u20Match) marketName = clean(u20Match[1])
 
+  if (!marketName) {
+    const cnpjLineIdx = plainLines.findIndex((line) => /^CNPJ[:\s]*[0-9.\-/]+/i.test(line))
+    if (cnpjLineIdx > 0) {
+      for (let i = cnpjLineIdx - 1; i >= 0; i--) {
+        const candidate = plainLines[i]
+        if (candidate && !/DOCUMENTO AUXILIAR|NOTA FISCAL|CONSUMIDOR ELETR|CHAVE DE ACESSO|CONSULTA/i.test(candidate)) {
+          marketName = candidate
+          break
+        }
+      }
+    }
+  }
+
   let cnpj = ''
-  const cnpjMatch = htmlString.match(/CNPJ[:\s]*([0-9.\-/]+)/i)
+  const cnpjMatch = htmlString.match(/CNPJ[:\s]*([0-9]{2}\.?[0-9]{3}\.?[0-9]{3}\/?[0-9]{4}-?[0-9]{2})/i)
+    || plainText.match(/CNPJ[:\s]*([0-9.\-/]{14,18})/i)
   if (cnpjMatch) cnpj = onlyDigits(cnpjMatch[1])
 
   let address = ''
-  const addressMatch = htmlString.match(/CNPJ[^<]*<\/div>\s*<div class=["']text["'][^>]*>([\s\S]*?)<\/div>/i)
+  const addressMatch = htmlString.match(/CNPJ[\s\S]*?<\/div>\s*<div[^>]*class=["'][^"']*\btext\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)
   if (addressMatch) {
-    address = clean(addressMatch[1].replace(/<br\s*\/?>/gi, ', ').replace(/\s*,\s*/g, ', '))
+    address = clean(addressMatch[1].replace(/<br\s*\/?>/gi, ', ')).replace(/\s*,\s*/g, ', ').replace(/^,\s*|,\s*$/g, '')
+  } else {
+    const cnpjLineIdx = plainLines.findIndex((line) => /CNPJ[:\s]*[0-9.\-/]+/i.test(line))
+    if (cnpjLineIdx !== -1 && plainLines[cnpjLineIdx + 1]) {
+      const nextLine = plainLines[cnpjLineIdx + 1]
+      if (!/\(C[óo]digo[:\s]|Qtde\.?[:\s]/i.test(nextLine)) {
+        address = nextLine
+      }
+    }
   }
 
-  // 2. Extrair Informações Gerais (Data, Número, Chave)
+  // 2. Extrair Informações Gerais (Data, Número, Valor Total)
   let emissionDateStr = ''
   const dateMatch = htmlString.match(/Emiss[aã]o[:\s]*(?:<\/strong>)?\s*([0-9]{2}\/[0-9]{2}\/[0-9]{4}\s+[0-9]{2}:[0-9]{2}(?::[0-9]{2})?)/i)
-    || htmlString.match(/([0-9]{2}\/[0-9]{2}\/[0-9]{4}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})/i)
+    || plainText.match(/Emiss[aã]o[:\s]*([0-9]{2}\/[0-9]{2}\/[0-9]{4}\s+[0-9]{2}:[0-9]{2}(?::[0-9]{2})?)/i)
+    || plainText.match(/([0-9]{2}\/[0-9]{2}\/[0-9]{4}\s+[0-9]{2}:[0-9]{2}:[0-9]{2})/i)
   if (dateMatch) {
     const parts = dateMatch[1].split(/[/\s:]/)
     if (parts.length >= 5) {
@@ -511,37 +603,45 @@ export function parseNfceHtml(htmlString) {
 
   let docNumber = ''
   const docMatch = htmlString.match(/N[úu]mero[:\s]*(?:<\/strong>)?\s*(\d+)/i)
+    || plainText.match(/N[úu]mero[:\s]*(\d+)/i)
   if (docMatch) docNumber = docMatch[1]
 
   let totalDeclared = 0
-  const totalMatch = htmlString.match(/Valor a pagar R\$:[^<]*<\/label>\s*<span[^>]*class=["'][^"']*totalNumb[^"']*["'][^>]*>([^<]+)<\/span>/i)
-    || htmlString.match(/class=["'][^"']*totalNumb txtMax[^"']*["'][^>]*>([^<]+)<\/span>/i)
+  const totalMatch = htmlString.match(/Valor a pagar R\$:?[\s\S]*?class=["'][^"']*\btotalNumb\b[^"']*["'][^>]*>([^<]+)<\/span>/i)
+    || htmlString.match(/class=["'][^"']*\btotalNumb\s+txtMax\b[^"']*["'][^>]*>([^<]+)<\/span>/i)
+    || plainText.match(/Valor a pagar(?:\s*R\$)?[:\s]*(?:R\$\s*)?([0-9.,]+)/i)
   if (totalMatch) totalDeclared = parseNum(totalMatch[1])
 
-  // 3. Extrair Itens da Tabela
+  // 3. Extrair Itens da Tabela HTML
   const items = []
-  const itemBlocks = htmlString.split(/<tr\s+id=["']Item/i).slice(1)
+  const rowMatches = [...htmlString.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)].map((m) => m[1])
+  const candidateBlocks = rowMatches.length > 0
+    ? rowMatches.filter((b) => /txtTit|RCod|Rqtd/i.test(b))
+    : htmlString.split(/<tr\b[^>]*id=["']?Item/i).slice(1)
 
-  for (const block of itemBlocks) {
-    const titMatch = block.match(/class=["']txtTit["'][^>]*>([^<]+)<\/span>/i)
+  for (const block of candidateBlocks) {
+    const titMatch = block.match(/class=["'][^"']*\btxtTit2?\b[^"']*["'][^>]*>([\s\S]*?)<\/span>/i)
     const rawDesc = titMatch ? clean(titMatch[1]) : ''
     if (!rawDesc) continue
 
-    const codMatch = block.match(/class=["']RCod["'][^>]*>\s*\(C[óo]digo[:\s]*(\d+)\s*\)/i)
-    const itemCode = codMatch ? codMatch[1].trim() : ''
+    const codMatch = block.match(/class=["'][^"']*\bRCod\b[^"']*["'][^>]*>[\s\S]*?\(\s*C[óo]digo[:\s]*([^)]+?)\s*\)/i)
+      || block.match(/\(\s*C[óo]digo[:\s]*([^)]+?)\s*\)/i)
+    const itemCode = codMatch ? clean(codMatch[1]) : ''
 
-    const qtdMatch = block.match(/class=["']Rqtd["'][^>]*>(?:<strong>[^<]*<\/strong>)?\s*([0-9,.]+)/i)
+    const qtdMatch = block.match(/class=["'][^"']*\bRqtd\b[^"']*["'][^>]*>(?:[\s\S]*?<\/strong>)?\s*([0-9.,]+)/i)
+      || block.match(/Qtde\.?[:\s]*(?:<[^>]+>)*\s*([0-9.,]+)/i)
     const quantity = qtdMatch ? parseNum(qtdMatch[1]) : 1
 
-    const unMatch = block.match(/class=["']RUN["'][^>]*>(?:<strong>[^<]*<\/strong>)?\s*([A-Za-z0-9]+)/i)
-    const unitRaw = unMatch ? clean(unMatch[1]).toLowerCase() : 'un'
-    const packageUnit = unitRaw === 'kg' ? 'kg' : unitRaw === 'g' || unitRaw === 'gr' ? 'g' : unitRaw === 'l' || unitRaw === 'lt' ? 'L' : unitRaw === 'ml' ? 'ml' : 'un'
+    const unMatch = block.match(/class=["'][^"']*\bRUN\b[^"']*["'][^>]*>(?:[\s\S]*?<\/strong>)?\s*([A-Za-z0-9]+)/i)
+      || block.match(/UN[:\s]*(?:<[^>]+>)*\s*([A-Za-z0-9]+)/i)
+    const packageUnit = mapNfceUnit(unMatch ? clean(unMatch[1]) : 'un')
 
-    const vlUnitMatch = block.match(/class=["']RvlUnit["'][^>]*>(?:<strong>[^<]*<\/strong>)?\s*([0-9,.]+)/i)
+    const vlUnitMatch = block.match(/class=["'][^"']*\bRvlUnit\b[^"']*["'][^>]*>(?:[\s\S]*?<\/strong>)?\s*(?:R\$\s*)?([0-9.,]+)/i)
+      || block.match(/Vl\.\s*Unit\.?[:\s]*(?:<[^>]+>)*\s*(?:R\$\s*)?([0-9.,]+)/i)
     const unitPrice = vlUnitMatch ? parseNum(vlUnitMatch[1]) : 0
 
-    const totalItemMatch = block.match(/class=["']valor["'][^>]*>([^<]+)<\/span>/i)
-    const totalPrice = totalItemMatch ? parseNum(totalItemMatch[1]) : (quantity * unitPrice)
+    const totalItemMatch = block.match(/class=["'][^"']*\bvalor\b[^"']*["'][^>]*>\s*(?:R\$\s*)?([0-9.,]+)\s*<\/span>/i)
+    const totalPrice = totalItemMatch ? parseNum(totalItemMatch[1]) : Number((quantity * unitPrice).toFixed(2))
 
     items.push({
       id: uid(),
@@ -560,7 +660,40 @@ export function parseNfceHtml(htmlString) {
     })
   }
 
+  // 4. Fallback: Extrair itens do texto plano (ex.: texto copiado diretamente da página da SEFAZ no celular)
   if (items.length === 0) {
+    const textItemRegex = /([^\n(]+?)\s*\(\s*C[óo]digo[:\s]*([^)]+?)\s*\)\s*Qtde\.?[:\s]*([0-9.,]+)\s*UN[:\s]*([A-Za-z0-9]+)\s*Vl\.\s*Unit\.?[:\s]*(?:R\$\s*)?([0-9.,]+)(?:\s*(?:Vl\.\s*Total[:\s]*)?(?:R\$\s*)?([0-9.,]+))?/gi
+    for (const match of plainText.matchAll(textItemRegex)) {
+      const rawDesc = match[1].replace(/\s+/g, ' ').trim()
+      if (!rawDesc) continue
+      const itemCode = match[2].trim()
+      const quantity = parseNum(match[3]) || 1
+      const packageUnit = mapNfceUnit(match[4])
+      const unitPrice = parseNum(match[5])
+      const totalPrice = match[6] ? parseNum(match[6]) : Number((quantity * unitPrice).toFixed(2))
+
+      items.push({
+        id: uid(),
+        descricaoOriginal: rawDesc,
+        produto: rawDesc,
+        variedade: '',
+        marca: '',
+        quantidadeComprada: quantity,
+        conteudoEmbalagem: packageUnit === 'kg' ? quantity : 1,
+        unidadeConteudo: packageUnit,
+        precoUnitario: unitPrice,
+        precoTotal: totalPrice,
+        codigoBarras: itemCode,
+        categoria: 'Outros',
+        problemasPossiveis: [],
+      })
+    }
+  }
+
+  if (items.length === 0) {
+    if (/g-recaptcha|h-captcha|captcha|txtChaveAcesso/i.test(htmlString)) {
+      throw new Error('A SEFAZ solicitou validação (Captcha) para exibir os produtos. Abra o link da nota no navegador, copie o texto da página e cole abaixo.')
+    }
     throw new Error('Não foi possível identificar os produtos na página da nota fiscal.')
   }
 
@@ -574,18 +707,46 @@ export function parseNfceHtml(htmlString) {
     compra: {
       data: emissionDateStr || nowIso(),
       numeroDocumento: docNumber,
-      valorTotal: totalDeclared || items.reduce((acc, it) => acc + it.precoTotal, 0),
+      valorTotal: totalDeclared || Number(items.reduce((acc, it) => acc + it.precoTotal, 0).toFixed(2)),
     },
     itens: items,
   }
 }
 
+export function isValidNfceHtml(html) {
+  if (!html || typeof html !== 'string') return false
+  // Rejeitar o próprio index.html do SPA (retornado pelo rewrite do Firebase Hosting)
+  if (html.includes('<div id="root"></div>') || html.includes('/src/main.jsx')) return false
+  // Rejeitar páginas de erro de proxy / Cloudflare
+  if (/cf-error-details|Error 522|Oops\.\.\.\s*Request Timeout/i.test(html)) return false
+  // Aceitar se contiver elementos reais de itens da NFC-e ou erro explícito da SEFAZ
+  return /id=["']tabResult["']|class=["'][^"']*\btxtTit2?\b|class=["'][^"']*\bRCod\b|class=["'][^"']*\bRqtd\b|\(\s*C[óo]|C&#243;digo|C&oacute;digo|spnErro(?:Prosseguir)?Master/i.test(html)
+}
+
 export async function fetchNfceFromUrl(url) {
-  if (!url || typeof url !== 'string' || !url.trim().startsWith('http')) {
+  if (!url || typeof url !== 'string') {
     throw new Error('Informe uma URL válida da NFC-e.')
   }
 
-  const cleanUrl = url.trim()
+  let cleanUrl = url.trim()
+  if (/^(www\.|[a-z0-9-]+\.(fazenda|sefaz)\.)/i.test(cleanUrl)) {
+    cleanUrl = `https://${cleanUrl}`
+  }
+  if (!cleanUrl.startsWith('http')) {
+    throw new Error('Informe uma URL válida da NFC-e.')
+  }
+  cleanUrl = cleanUrl.replace(/^http:\/\/(www\.nfce\.fazenda\.sp\.gov\.br)/i, 'https://$1')
+
+  let emptySefazPageSeen = false
+
+  const checkHtml = (html) => {
+    if (!html || typeof html !== 'string') return null
+    if (isValidNfceHtml(html)) return html
+    if (/Secretaria da Fazenda|Consulta NFC-e|NFCeConsultaPublica/i.test(html)) {
+      emptySefazPageSeen = true
+    }
+    return null
+  }
 
   // 1. Tentar proxy interno (/api/proxy-nfce) caso esteja rodando com Vite dev server
   try {
@@ -593,25 +754,26 @@ export async function fetchNfceFromUrl(url) {
       signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined,
     })
     if (localRes.ok) {
-      const html = await localRes.text()
-      if (html && (html.includes('DOCUMENTO AUXILIAR') || html.includes('NFC-e') || html.includes('tabResult') || html.includes('txtTit') || html.length > 500)) {
-        return html
-      }
+      const valid = checkHtml(await localRes.text())
+      if (valid) return valid
     }
-  } catch {}
+  } catch {
+    // Tentar próximo proxy
+  }
 
-  // 2. Tentar AllOrigins JSON format (formato JSON que não falha com certificado da SEFAZ)
+  // 2. Tentar AllOrigins JSON format
   try {
     const allOriginsRes = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(cleanUrl)}`, {
       signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined,
     })
     if (allOriginsRes.ok) {
       const data = await allOriginsRes.json()
-      if (data?.contents && (data.contents.includes('DOCUMENTO AUXILIAR') || data.contents.includes('NFC-e') || data.contents.includes('tabResult') || data.contents.length > 500)) {
-        return data.contents
-      }
+      const valid = checkHtml(data?.contents)
+      if (valid) return valid
     }
-  } catch {}
+  } catch {
+    // Tentar próximo proxy
+  }
 
   // 3. Tentar CodeTabs proxy
   try {
@@ -619,12 +781,12 @@ export async function fetchNfceFromUrl(url) {
       signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined,
     })
     if (codetabsRes.ok) {
-      const html = await codetabsRes.text()
-      if (html && (html.includes('DOCUMENTO AUXILIAR') || html.includes('NFC-e') || html.includes('tabResult') || html.length > 500)) {
-        return html
-      }
+      const valid = checkHtml(await codetabsRes.text())
+      if (valid) return valid
     }
-  } catch {}
+  } catch {
+    // Tentar próximo proxy
+  }
 
   // 4. Tentar CorsProxy.io
   try {
@@ -632,14 +794,18 @@ export async function fetchNfceFromUrl(url) {
       signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined,
     })
     if (corsProxyRes.ok) {
-      const html = await corsProxyRes.text()
-      if (html && (html.includes('DOCUMENTO AUXILIAR') || html.includes('NFC-e') || html.includes('tabResult') || html.length > 500)) {
-        return html
-      }
+      const valid = checkHtml(await corsProxyRes.text())
+      if (valid) return valid
     }
-  } catch {}
+  } catch {
+    // Falha em todos os proxies
+  }
 
-  throw new Error('Não foi possível carregar os dados da SEFAZ. Verifique sua conexão ou se a URL está correta.')
+  if (emptySefazPageSeen) {
+    throw new Error('A SEFAZ redirecionou a consulta sem exibir a lista de produtos (sessão ou bloqueio do portal). Abra o link da nota no navegador, copie o texto da página e cole abaixo.')
+  }
+
+  throw new Error('A SEFAZ bloqueou a leitura direta desta nota pelo aplicativo. Toque em "Abrir nota na SEFAZ", copie o texto da página e cole abaixo.')
 }
 
 export function buildReceiptPromptFromNfce(nfcePayload, products = [], options = {}) {

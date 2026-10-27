@@ -158,21 +158,66 @@ function ShoppingListPage({ state, mutate, open }) {
   const [groupByCategory, setGroupByCategory] = useState(() => localStorage.getItem('shopping-list-grouped') === 'true')
   const [showItemEstimates, setShowItemEstimates] = useState(() => localStorage.getItem('shopping-list-item-estimates') === 'true')
   const [drawerItem, setDrawerItem] = useState(null)
+  const [isDrawerClosing, setIsDrawerClosing] = useState(false)
+  const [drawerActivityTick, setDrawerActivityTick] = useState(0)
+  const drawerCloseTimeoutRef = useRef(null)
+
+  const clearDrawerCloseTimeout = () => {
+    if (drawerCloseTimeoutRef.current) {
+      clearTimeout(drawerCloseTimeoutRef.current)
+      drawerCloseTimeoutRef.current = null
+    }
+  }
+
+  const closeDrawer = () => {
+    if (!drawerItem || isDrawerClosing) return
+    setIsDrawerClosing(true)
+    clearDrawerCloseTimeout()
+    drawerCloseTimeoutRef.current = setTimeout(() => {
+      setDrawerItem(null)
+      setIsDrawerClosing(false)
+      drawerCloseTimeoutRef.current = null
+    }, 220)
+  }
+
+  const resetDrawerTimer = () => {
+    if (isDrawerClosing) {
+      clearDrawerCloseTimeout()
+      setIsDrawerClosing(false)
+    }
+    setDrawerActivityTick((tick) => tick + 1)
+  }
+
+  useEffect(() => () => clearDrawerCloseTimeout(), [])
 
   useEffect(() => localStorage.setItem('shopping-list-view', viewMode), [viewMode])
   useEffect(() => localStorage.setItem('shopping-list-grouped', String(groupByCategory)), [groupByCategory])
   useEffect(() => localStorage.setItem('shopping-list-item-estimates', String(showItemEstimates)), [showItemEstimates])
 
   useEffect(() => {
-    if (drawerItem) {
+    if (drawerItem && !isDrawerClosing) {
       const exists = list.items.find((item) => item.id === drawerItem.itemId)
       if (!exists) {
-        setDrawerItem(null)
+        closeDrawer()
       } else if (exists.quantity !== drawerItem.quantity) {
         setDrawerItem((prev) => prev ? { ...prev, quantity: exists.quantity } : null)
       }
     }
-  }, [list.items, drawerItem])
+  }, [list.items, drawerItem, isDrawerClosing])
+
+  useEffect(() => {
+    if (!drawerItem || isDrawerClosing) return
+    const autoHideTimer = setTimeout(() => {
+      setIsDrawerClosing(true)
+      clearDrawerCloseTimeout()
+      drawerCloseTimeoutRef.current = setTimeout(() => {
+        setDrawerItem(null)
+        setIsDrawerClosing(false)
+        drawerCloseTimeoutRef.current = null
+      }, 220)
+    }, 4000)
+    return () => clearTimeout(autoHideTimer)
+  }, [drawerItem?.itemId, drawerItem?.quantity, drawerActivityTick, isDrawerClosing])
 
   const addProduct = (product, customQuantity) => {
     const lastQty = getLastPurchasedQuantity(state, product)
@@ -194,6 +239,8 @@ function ShoppingListPage({ state, mutate, open }) {
         lists: s.lists.map((current) => ({ ...current, items: [...current.items, listItemToSave] })),
       }
     })
+    clearDrawerCloseTimeout()
+    setIsDrawerClosing(false)
     setDrawerItem({
       itemId: newItem.id,
       product,
@@ -205,6 +252,7 @@ function ShoppingListPage({ state, mutate, open }) {
       quantity: newItem.quantity,
       lastPurchasedQty: hasHistory ? lastQty : null,
     })
+    setDrawerActivityTick((tick) => tick + 1)
     return newItem
   }
 
@@ -217,10 +265,14 @@ function ShoppingListPage({ state, mutate, open }) {
         items: currentList.items.map((item) => item.id === itemId ? { ...item, quantity: qty } : item)
       }))
     }))
+    clearDrawerCloseTimeout()
+    setIsDrawerClosing(false)
     setDrawerItem((prev) => prev && prev.itemId === itemId ? { ...prev, quantity: qty } : prev)
+    setDrawerActivityTick((tick) => tick + 1)
   }
 
   const removeDrawerItem = (itemId) => {
+    closeDrawer()
     mutate((s) => ({
       ...s,
       lists: s.lists.map((currentList) => ({
@@ -228,7 +280,6 @@ function ShoppingListPage({ state, mutate, open }) {
         items: currentList.items.filter((item) => item.id !== itemId)
       }))
     }))
-    setDrawerItem(null)
   }
 
   const toggleCompleted = (itemId) => mutate((s) => ({ ...s, lists: s.lists.map((current) => ({ ...current, items: current.items.map((item) => item.id === itemId ? { ...item, checked: !item.checked } : item) })) }))
@@ -257,9 +308,11 @@ function ShoppingListPage({ state, mutate, open }) {
         topBar={drawerItem ? (
           <TopQuantityBar
             drawerItem={drawerItem}
+            closing={isDrawerClosing}
             onUpdateQuantity={updateDrawerQuantity}
             onRemove={removeDrawerItem}
-            onClose={() => setDrawerItem(null)}
+            onClose={closeDrawer}
+            onInteract={resetDrawerTimer}
           />
         ) : null}
       />
@@ -644,7 +697,7 @@ function InlineProductSearch({ products, list, onAdd, topBar = null }) {
   }
   return <div className="inline-autocomplete" ref={containerRef}>
     <div className={`autocomplete-search ${showPopover ? 'open' : ''}`}><Search size={20}/><input ref={inputRef} role="combobox" aria-controls="product-options" aria-expanded={showPopover} placeholder="Adicionar produto..." value={query} onFocus={() => setOpen(true)} onChange={(event) => { setQuery(event.target.value); setOpen(true) }} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); if (event.key === 'Enter' && (variantResults[0] || results[0])) { event.preventDefault(); add(variantResults[0] || results[0]) } }}/><span className="search-hint">Digite para buscar</span></div>
-    {topBar}
+    {!showPopover && topBar}
     {showPopover && <div className="autocomplete-popover" onPointerDown={(event) => { if (event.target.closest('button')) event.preventDefault() }}><div className="popover-heading"><b>Resultados</b></div><div className="autocomplete-results" id="product-options" role="listbox">
         {variantResults.length > 0 && <div className="variant-results-heading first-variant-heading full-width-heading"><b>Variedades cadastradas</b></div>}
         <div className="results-grid">
@@ -2407,6 +2460,8 @@ function ImportModal({ products = [], onClose, onReview, toast, onOpenPrompt }) 
   const [loadingStep, setLoadingStep] = useState('')
   const [nfceData, setNfceData] = useState(null)
   const [showScanner, setShowScanner] = useState(false)
+  const [manualNfceText, setManualNfceText] = useState('')
+  const [showManualNfcePaste, setShowManualNfcePaste] = useState(false)
   const [text, setText] = useState('')
   const [error, setError] = useState('')
   const [includeCatalog, setIncludeCatalog] = useState(true)
@@ -2434,13 +2489,53 @@ function ImportModal({ products = [], onClose, onReview, toast, onOpenPrompt }) 
       setLoadingStep('Extraindo produtos e valores...')
       const parsed = parseNfceHtml(html)
       setNfceData(parsed)
+      setShowManualNfcePaste(false)
       toast('Nota fiscal carregada com sucesso!')
     } catch (err) {
       setError(err.message || 'Erro ao carregar dados da nota fiscal.')
       setNfceData(null)
+      setShowManualNfcePaste(true)
     } finally {
       setLoading(false)
       setLoadingStep('')
+    }
+  }
+
+  const handleParseManualNfce = (rawContent) => {
+    const content = (rawContent ?? manualNfceText).trim()
+    if (!content) {
+      setError('Cole o texto ou HTML copiado da página da nota fiscal.')
+      return
+    }
+    try {
+      const parsed = parseNfceHtml(content)
+      setNfceData(parsed)
+      setError('')
+      toast('Produtos extraídos da nota com sucesso!')
+    } catch (err) {
+      setError(err.message || 'Não foi possível extrair os produtos do texto colado.')
+      setNfceData(null)
+    }
+  }
+
+  const handlePasteFromClipboard = async () => {
+    try {
+      if (!navigator.clipboard?.readText) {
+        setShowManualNfcePaste(true)
+        setError('Toque no campo abaixo e cole o texto copiado da página da SEFAZ.')
+        return
+      }
+      const clip = await navigator.clipboard.readText()
+      if (!clip || !clip.trim()) {
+        setShowManualNfcePaste(true)
+        setError('A área de transferência está vazia. Copie o texto da página da nota na SEFAZ primeiro.')
+        return
+      }
+      setManualNfceText(clip)
+      handleParseManualNfce(clip)
+    } catch {
+      setShowManualNfcePaste(true)
+      setError('Permita o acesso à área de transferência ou cole o texto manualmente no campo abaixo.')
     }
   }
 
@@ -2542,6 +2637,78 @@ function ImportModal({ products = [], onClose, onReview, toast, onOpenPrompt }) 
             )}
 
             {error && <p className="error">{error}</p>}
+
+            {/* Alternativa caso a SEFAZ bloqueie o proxy / peça Captcha */}
+            {!loading && !nfceData && (showManualNfcePaste || url.trim()) && (
+              <div className="nfce-manual-fallback-card">
+                <div className="nfce-manual-fallback-header">
+                  <div>
+                    <b>Leitura assistida pelo navegador</b>
+                    <small>
+                      Se o portal da SEFAZ bloquear a leitura direta ou pedir confirmação, abra o link da nota, selecione tudo, copie o texto da página e cole aqui:
+                    </small>
+                  </div>
+                </div>
+
+                <div className="nfce-manual-fallback-actions">
+                  {url.trim() && (
+                    <a
+                      href={url.trim()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="secondary nfce-open-link-btn"
+                      onClick={() => setShowManualNfcePaste(true)}
+                    >
+                      <Globe size={16} />
+                      <span>1. Abrir nota na SEFAZ</span>
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    className="primary nfce-paste-clip-btn"
+                    onClick={handlePasteFromClipboard}
+                  >
+                    <ClipboardCopy size={16} />
+                    <span>{url.trim() ? '2. Colar texto copiado' : 'Colar texto copiado da nota'}</span>
+                  </button>
+                </div>
+
+                {showManualNfcePaste && (
+                  <div className="nfce-manual-paste-box">
+                    <textarea
+                      className="json-input nfce-manual-textarea"
+                      rows={4}
+                      value={manualNfceText}
+                      onChange={(e) => {
+                        const val = e.target.value
+                        setManualNfceText(val)
+                        setError('')
+                        if (val.trim().length > 80 && /\(C[óo]digo[:\s]|txtTit/i.test(val)) {
+                          try {
+                            const parsed = parseNfceHtml(val)
+                            setNfceData(parsed)
+                            toast('Produtos extraídos da nota com sucesso!')
+                          } catch {
+                            // Aguardar clique manual se ainda incompleto
+                          }
+                        }
+                      }}
+                      placeholder="Cole aqui o texto (Selecionar tudo → Copiar) ou HTML da página da nota fiscal da SEFAZ..."
+                    />
+                    {manualNfceText.trim() && (
+                      <button
+                        type="button"
+                        className="primary full"
+                        onClick={() => handleParseManualNfce(manualNfceText)}
+                      >
+                        <CheckCircle2 size={16} />
+                        <span>Extrair produtos do texto</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Resultado da Nota Extraída */}
             {nfceData && !loading && (
@@ -3760,7 +3927,7 @@ function periodComparison(purchases, period, currentTotal) {
 function periodStart(period) { const date = new Date(); date.setHours(0, 0, 0, 0); date.setDate(date.getDate() - Number(period)); return date }
 function formatNumber(value, digits = 0) { return new Intl.NumberFormat('pt-BR', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(Number(value) || 0) }
 
-function TopQuantityBar({ drawerItem, onUpdateQuantity, onRemove, onClose }) {
+function TopQuantityBar({ drawerItem, closing = false, onUpdateQuantity, onRemove, onClose, onInteract }) {
   if (!drawerItem) return null
   const { itemId, name, variety, brand, category, unit, quantity, lastPurchasedQty } = drawerItem
   const isDecimalUnit = ['kg', 'g', 'L', 'ml'].includes(unit)
@@ -3774,7 +3941,12 @@ function TopQuantityBar({ drawerItem, onUpdateQuantity, onRemove, onClose }) {
   }
 
   return (
-    <div className={`top-quantity-bar category-${categoryKey(category)}`} aria-label="Ajustar quantidade do produto">
+    <div
+      className={`top-quantity-bar category-${categoryKey(category)} ${closing ? 'closing' : ''}`}
+      aria-label="Ajustar quantidade do produto"
+      onPointerDown={() => onInteract?.()}
+      onMouseEnter={() => onInteract?.()}
+    >
       <div className="top-quantity-main">
         <CategoryIcon category={category} size={18} />
         <div className="top-quantity-info">
